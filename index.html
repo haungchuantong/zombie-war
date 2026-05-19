@@ -3,21 +3,21 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>PIXEL ZOMBIE SURVIVAL</title>
+  <title>像素僵尸生存</title>
   <link rel="icon" href="data:," />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <canvas id="gameCanvas" aria-label="PIXEL ZOMBIE SURVIVAL game canvas"></canvas>
+  <canvas id="gameCanvas" aria-label="像素僵尸生存游戏画布"></canvas>
 
   <div id="uiRoot">
     <section id="menuScreen" class="screen active">
       <div class="city-silhouette"></div>
       <div class="menu-panel">
         <h1 class="game-title">
-          <span>PIXEL</span>
-          <span>ZOMBIE</span>
-          <span>SURVIVAL</span>
+          <span>像素</span>
+          <span>僵尸</span>
+          <span>生存</span>
         </h1>
         <p class="subtitle">像素尸潮生存挑战</p>
         <button id="startBtn" class="pixel-btn primary">开始游戏</button>
@@ -30,7 +30,7 @@
         </div>
         <div class="controls">
           <p>WASD 移动 · 鼠标瞄准 · 左键射击</p>
-          <p>R 换弹 · 空格冲刺 · ESC 暂停</p>
+          <p>鼠标右键换弹 · 空格冲刺 · ESC 暂停</p>
         </div>
       </div>
     </section>
@@ -48,7 +48,7 @@
 
     <section id="gameOverScreen" class="screen">
       <div class="panel gameover-panel">
-        <h2 class="gameover-title">GAME OVER</h2>
+        <h2 class="gameover-title">游戏结束</h2>
         <div class="stats-grid">
           <span>本局生存</span><strong id="finalTime">00:00</strong>
           <span>本局击杀</span><strong id="finalKills">0</strong>
@@ -76,6 +76,6 @@
     <button id="fireTouchBtn" class="touch-action touch-fire" type="button">射击</button>
   </div>
 
-  <script src="main.js"></script>
+  <script src="main.js?v=20260519-cn-reload-chest-ammo"></script>
 </body>
 </html>

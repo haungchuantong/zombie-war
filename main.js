@@ -1,0 +1,2219 @@
+(() => {
+  "use strict";
+
+  const canvas = document.getElementById("gameCanvas");
+  const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingEnabled = false;
+
+  const STORAGE_KEYS = {
+    coins: "pzs_totalCoins",
+    bestKills: "pzs_bestKills",
+    bestTime: "pzs_bestTime",
+    upgrades: "pzs_upgrades"
+  };
+
+  const UPGRADE_DEFS = {
+    damage: { name: "武器伤害", icon: "DMG", baseCost: 100, max: 10, effect: "每级 +5 伤害" },
+    fireRate: { name: "射击速度", icon: "ROF", baseCost: 120, max: 10, effect: "每级缩短射击间隔" },
+    maxHp: { name: "最大生命值", icon: "HP", baseCost: 90, max: 10, effect: "每级 +20 HP" },
+    speed: { name: "移动速度", icon: "SPD", baseCost: 100, max: 10, effect: "每级 +0.15 速度" },
+    magazine: {
+      name: "弹夹容量",
+      icon: "MAG",
+      max: 10,
+      baseValue: 12,
+      perLevel: 3,
+      costs: [120, 180, 260, 360, 500, 680, 900, 1150, 1450],
+      effect: "增加每个弹夹的最大子弹数量"
+    }
+  };
+
+  const rand = (min, max) => Math.random() * (max - min) + min;
+  const randInt = (min, max) => Math.floor(rand(min, max + 1));
+  const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+  const dist = (a, b, c, d) => Math.hypot(a - c, b - d);
+  const angleTo = (x1, y1, x2, y2) => Math.atan2(y2 - y1, x2 - x1);
+  const formatTime = (seconds) => {
+    const total = Math.max(0, Math.floor(seconds));
+    const m = String(Math.floor(total / 60)).padStart(2, "0");
+    const s = String(total % 60).padStart(2, "0");
+    return `${m}:${s}`;
+  };
+
+  function pixelRect(context, x, y, w, h, color) {
+    context.fillStyle = color;
+    context.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+  }
+
+  function withTransform(context, x, y, rotation, draw) {
+    context.save();
+    context.translate(Math.round(x), Math.round(y));
+    context.rotate(rotation);
+    draw();
+    context.restore();
+  }
+
+  function drawPixelShadow(context, x, y, w, h, alpha = 0.34) {
+    context.save();
+    context.fillStyle = `rgba(0, 0, 0, ${alpha})`;
+    context.beginPath();
+    context.ellipse(Math.round(x), Math.round(y), Math.round(w / 2), Math.round(h / 2), 0, 0, Math.PI * 2);
+    context.fill();
+    context.restore();
+  }
+
+  function drawPixelOutlineRect(context, x, y, w, h, fill, outline = "#070808", highlight = null, shade = null) {
+    pixelRect(context, x - 2, y - 2, w + 4, h + 4, outline);
+    pixelRect(context, x, y, w, h, fill);
+    if (highlight) {
+      pixelRect(context, x, y, w, 2, highlight);
+      pixelRect(context, x, y, 2, h, highlight);
+    }
+    if (shade) {
+      pixelRect(context, x, y + h - 3, w, 3, shade);
+      pixelRect(context, x + w - 3, y, 3, h, shade);
+    }
+  }
+
+  function drawIsoBox(context, x, y, w, h, d, top, left, right, outline = "#070808") {
+    const hw = w / 2;
+    context.save();
+    context.translate(Math.round(x), Math.round(y));
+    context.fillStyle = outline;
+    context.beginPath();
+    context.moveTo(0, -d - 3);
+    context.lineTo(hw + 3, -3);
+    context.lineTo(hw + 3, h + 3);
+    context.lineTo(0, h + d + 3);
+    context.lineTo(-hw - 3, h + 3);
+    context.lineTo(-hw - 3, -3);
+    context.closePath();
+    context.fill();
+
+    context.fillStyle = left;
+    context.beginPath();
+    context.moveTo(-hw, 0);
+    context.lineTo(0, d);
+    context.lineTo(0, h + d);
+    context.lineTo(-hw, h);
+    context.closePath();
+    context.fill();
+
+    context.fillStyle = right;
+    context.beginPath();
+    context.moveTo(hw, 0);
+    context.lineTo(0, d);
+    context.lineTo(0, h + d);
+    context.lineTo(hw, h);
+    context.closePath();
+    context.fill();
+
+    context.fillStyle = top;
+    context.beginPath();
+    context.moveTo(0, -d);
+    context.lineTo(hw, 0);
+    context.lineTo(0, d);
+    context.lineTo(-hw, 0);
+    context.closePath();
+    context.fill();
+    context.strokeStyle = "rgba(255,255,255,0.12)";
+    context.lineWidth = 2;
+    context.beginPath();
+    context.moveTo(0, -d);
+    context.lineTo(-hw, 0);
+    context.stroke();
+    context.restore();
+  }
+
+  function drawPixelSpark(context, x, y, angle, length, color) {
+    context.save();
+    context.translate(Math.round(x), Math.round(y));
+    context.rotate(angle);
+    pixelRect(context, 0, -1, length, 2, color);
+    pixelRect(context, Math.floor(length * 0.45), -2, Math.floor(length * 0.28), 4, "#fff1a4");
+    context.restore();
+  }
+
+  function drawMuzzleFlash(context, x, y, angle, scale = 1) {
+    context.save();
+    context.translate(Math.round(x), Math.round(y));
+    context.rotate(angle);
+    pixelRect(context, 0, -3 * scale, 10 * scale, 6 * scale, "#fff2a0");
+    pixelRect(context, 8 * scale, -5 * scale, 12 * scale, 10 * scale, "#ff9b22");
+    pixelRect(context, 17 * scale, -2 * scale, 8 * scale, 4 * scale, "#ffd45a");
+    pixelRect(context, 4 * scale, -7 * scale, 6 * scale, 3 * scale, "#ff6b1f");
+    pixelRect(context, 4 * scale, 4 * scale, 6 * scale, 3 * scale, "#ff6b1f");
+    context.restore();
+  }
+
+  function drawMiniGunIcon(context, x, y) {
+    drawPixelOutlineRect(context, x, y + 6, 26, 9, "#242a2b", "#060707", "#606b6b", "#0f1212");
+    pixelRect(context, x + 22, y + 8, 13, 4, "#51595a");
+    pixelRect(context, x + 9, y + 14, 6, 9, "#111414");
+    pixelRect(context, x + 4, y + 4, 12, 4, "#8b6a3c");
+  }
+
+  function drawCoinIcon(context, x, y) {
+    drawPixelOutlineRect(context, x, y, 16, 16, "#b36b08", "#070707", "#ffe178", "#6b3504");
+    pixelRect(context, x + 3, y + 2, 10, 10, "#ffd34a");
+    pixelRect(context, x + 6, y + 4, 4, 8, "#fff1a2");
+  }
+
+  function drawSkullIcon(context, x, y) {
+    drawPixelOutlineRect(context, x + 2, y, 14, 12, "#d8d6c4", "#080808", "#ffffff", "#8c8b80");
+    pixelRect(context, x + 5, y + 4, 3, 3, "#101010");
+    pixelRect(context, x + 11, y + 4, 3, 3, "#101010");
+    pixelRect(context, x + 7, y + 10, 2, 5, "#d8d6c4");
+    pixelRect(context, x + 11, y + 10, 2, 5, "#d8d6c4");
+  }
+
+  function drawMagazineIcon(context, x, y) {
+    drawPixelOutlineRect(context, x + 2, y + 2, 18, 24, "#2c3434", "#050606", "#6f7a72", "#101515");
+    pixelRect(context, x + 6, y + 6, 4, 16, "#d99522");
+    pixelRect(context, x + 12, y + 6, 4, 16, "#f0c35c");
+    pixelRect(context, x + 5, y + 22, 13, 3, "#111515");
+    pixelRect(context, x + 21, y + 8, 5, 12, "#151a1b");
+  }
+
+  function drawPixelPolygon(context, points, color) {
+    context.fillStyle = color;
+    context.beginPath();
+    context.moveTo(Math.round(points[0][0]), Math.round(points[0][1]));
+    for (let i = 1; i < points.length; i++) {
+      context.lineTo(Math.round(points[i][0]), Math.round(points[i][1]));
+    }
+    context.closePath();
+    context.fill();
+  }
+
+  function drawIsoSpriteBlock(context, x, y, w, h, colors, slant = 5) {
+    const outline = colors.outline || "#050606";
+    const mid = colors.mid;
+    const light = colors.light || mid;
+    const dark = colors.dark || mid;
+    const pts = [
+      [x + slant, y],
+      [x + w - 2, y + 2],
+      [x + w, y + h - slant],
+      [x + w - slant, y + h],
+      [x + 2, y + h - 2],
+      [x, y + slant]
+    ];
+    drawPixelPolygon(context, pts.map(([px, py]) => [px - 2, py - 2]), outline);
+    drawPixelPolygon(context, pts, mid);
+    drawPixelPolygon(context, [
+      [x + slant, y],
+      [x + w - 4, y + 2],
+      [x + w - 8, y + 6],
+      [x + slant + 2, y + 5]
+    ], light);
+    drawPixelPolygon(context, [
+      [x + w - 5, y + 5],
+      [x + w, y + h - slant],
+      [x + w - slant, y + h],
+      [x + w - slant - 4, y + h - 5]
+    ], dark);
+    pixelRect(context, x + 2, y + h - 4, Math.max(4, w - 8), 3, dark);
+  }
+
+  function drawIsoHead(context, x, y, scale, palette, options = {}) {
+    const w = 16 * scale;
+    const h = 17 * scale;
+    drawIsoSpriteBlock(context, x, y, w, h, {
+      outline: palette.outline,
+      mid: palette.skinMid,
+      light: palette.skinLight,
+      dark: palette.skinDark
+    }, 4 * scale);
+    pixelRect(context, x + 2 * scale, y + 2 * scale, 11 * scale, 4 * scale, palette.hairMid || palette.skinDark);
+    pixelRect(context, x, y + 4 * scale, 8 * scale, 5 * scale, palette.hairDark || palette.skinDark);
+    pixelRect(context, x + 4 * scale, y, 8 * scale, 3 * scale, palette.hairLight || palette.skinLight);
+    pixelRect(context, x + 5 * scale, y + 8 * scale, 3 * scale, 3 * scale, options.eye || "#11110f");
+    pixelRect(context, x + 11 * scale, y + 8 * scale, 3 * scale, 3 * scale, options.eye || "#11110f");
+    if (options.eyeGlow) {
+      pixelRect(context, x + 4 * scale, y + 7 * scale, 5 * scale, 5 * scale, options.eyeGlow);
+      pixelRect(context, x + 10 * scale, y + 7 * scale, 5 * scale, 5 * scale, options.eyeGlow);
+    }
+    pixelRect(context, x + 7 * scale, y + 13 * scale, 6 * scale, 2 * scale, palette.mouth || "#57241d");
+    pixelRect(context, x + w - 4 * scale, y + 6 * scale, 3 * scale, 7 * scale, palette.skinDark);
+  }
+
+  function drawIsoTorso(context, x, y, w, h, palette, options = {}) {
+    drawIsoSpriteBlock(context, x, y, w, h, {
+      outline: palette.outline,
+      mid: palette.clothMid,
+      light: palette.clothLight,
+      dark: palette.clothDark
+    }, options.slant || 6);
+    pixelRect(context, x + 4, y + 4, Math.max(5, w * 0.28), 5, palette.clothLight);
+    pixelRect(context, x + Math.floor(w * 0.48), y + 3, 4, h - 5, palette.clothDark);
+    pixelRect(context, x + w - 8, y + h - 11, 5, 8, palette.clothDark);
+    if (options.belly) {
+      drawIsoSpriteBlock(context, x - 3, y + 8, w + 6, h - 4, {
+        outline: palette.outline,
+        mid: options.belly.mid,
+        light: options.belly.light,
+        dark: options.belly.dark
+      }, 7);
+    }
+  }
+
+  function drawIsoLimb(context, x, y, w, h, palette, angle = 0) {
+    context.save();
+    context.translate(Math.round(x), Math.round(y));
+    context.rotate(angle);
+    drawIsoSpriteBlock(context, 0, 0, w, h, {
+      outline: palette.outline,
+      mid: palette.mid,
+      light: palette.light,
+      dark: palette.dark
+    }, Math.max(3, Math.floor(w * 0.45)));
+    context.restore();
+  }
+
+  function drawSpriteFeetShadow(context, x, y, w, h, alpha = 0.42) {
+    drawPixelShadow(context, x, y, w, h, alpha);
+    pixelRect(context, x - w * 0.24, y - 1, w * 0.48, 2, "rgba(0,0,0,0.18)");
+  }
+
+  class AudioBus {
+    constructor() {
+      this.ctx = null;
+    }
+
+    ensure() {
+      if (!this.ctx) {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (AudioContext) this.ctx = new AudioContext();
+      }
+      if (this.ctx && this.ctx.state === "suspended") this.ctx.resume();
+      return this.ctx;
+    }
+
+    beep(freq, duration, type = "square", gain = 0.05) {
+      const audio = this.ensure();
+      if (!audio) return;
+      const osc = audio.createOscillator();
+      const volume = audio.createGain();
+      osc.type = type;
+      osc.frequency.value = freq;
+      volume.gain.value = gain;
+      volume.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + duration);
+      osc.connect(volume);
+      volume.connect(audio.destination);
+      osc.start();
+      osc.stop(audio.currentTime + duration);
+    }
+  }
+
+  const audioBus = new AudioBus();
+  window.playShootSound = () => audioBus.beep(420, 0.045, "square", 0.035);
+  window.playHitSound = () => audioBus.beep(170, 0.055, "sawtooth", 0.03);
+  window.playZombieDeathSound = () => audioBus.beep(80, 0.11, "sawtooth", 0.045);
+  window.playPlayerHurtSound = () => audioBus.beep(95, 0.14, "triangle", 0.06);
+  window.playCoinSound = () => audioBus.beep(850, 0.06, "square", 0.035);
+  window.playUpgradeSound = () => audioBus.beep(620, 0.12, "triangle", 0.045);
+  window.playHordeSound = () => {
+    audioBus.beep(120, 0.18, "sawtooth", 0.055);
+    setTimeout(() => audioBus.beep(90, 0.22, "square", 0.045), 120);
+  };
+
+  class Particle {
+    constructor(x, y, options = {}) {
+      this.x = x;
+      this.y = y;
+      this.vx = options.vx ?? rand(-1, 1);
+      this.vy = options.vy ?? rand(-1, 1);
+      this.size = options.size ?? rand(2, 5);
+      this.life = options.life ?? rand(0.25, 0.75);
+      this.maxLife = this.life;
+      this.color = options.color ?? "#ffd45a";
+      this.gravity = options.gravity ?? 0;
+      this.fade = options.fade ?? true;
+      this.kind = options.kind ?? "square";
+      this.angle = options.angle ?? 0;
+    }
+
+    update(dt) {
+      this.x += this.vx * 60 * dt;
+      this.y += this.vy * 60 * dt;
+      this.vy += this.gravity * 60 * dt;
+      this.life -= dt;
+      return this.life > 0;
+    }
+
+    draw(context) {
+      const alpha = this.fade ? clamp(this.life / this.maxLife, 0, 1) : 1;
+      context.save();
+      context.globalAlpha = alpha;
+      if (this.kind === "muzzle") {
+        drawMuzzleFlash(context, this.x, this.y, this.angle, this.size / 5);
+      } else if (this.kind === "spark") {
+        drawPixelSpark(context, this.x, this.y, Math.atan2(this.vy, this.vx), Math.max(6, this.size * 4), this.color);
+      } else if (this.kind === "smoke") {
+        pixelRect(context, this.x - this.size, this.y - this.size / 2, this.size * 2, this.size, "rgba(34,38,36,0.8)");
+        pixelRect(context, this.x - this.size / 2, this.y - this.size, this.size, this.size * 2, "rgba(18,20,19,0.55)");
+      } else {
+        pixelRect(context, this.x - 1, this.y - 1, this.size + 2, this.size + 2, "#070808");
+        pixelRect(context, this.x, this.y, this.size, this.size, this.color);
+        if (this.kind === "blood" || this.color.includes("38") || this.color.includes("6d")) {
+          pixelRect(context, this.x + this.size - 1, this.y + this.size - 1, 2, 2, "rgba(0,0,0,0.35)");
+        }
+      }
+      context.restore();
+    }
+  }
+
+  class Bullet {
+    constructor(x, y, angle, damage) {
+      this.x = x;
+      this.y = y;
+      this.prevX = x;
+      this.prevY = y;
+      this.angle = angle;
+      this.damage = damage;
+      this.speed = 9;
+      this.radius = 4;
+      this.alive = true;
+    }
+
+    update(dt, game) {
+      this.prevX = this.x;
+      this.prevY = this.y;
+      this.x += Math.cos(this.angle) * this.speed * 60 * dt;
+      this.y += Math.sin(this.angle) * this.speed * 60 * dt;
+
+      if (this.x < -30 || this.x > game.width + 30 || this.y < -30 || this.y > game.height + 30) {
+        this.alive = false;
+        return;
+      }
+
+      for (const zombie of game.zombies) {
+        if (!zombie.alive) continue;
+        if (dist(this.x, this.y, zombie.x, zombie.y) < this.radius + zombie.radius) {
+          zombie.takeDamage(this.damage, game);
+          this.alive = false;
+          for (let i = 0; i < 8; i++) {
+            game.particles.push(new Particle(this.x, this.y, {
+              vx: rand(-2.3, 2.3),
+              vy: rand(-2.3, 2.3),
+              size: randInt(2, 4),
+              life: rand(0.18, 0.42),
+              color: Math.random() > 0.55 ? "#ffd24b" : Math.random() > 0.5 ? "#ff8a22" : "#6fbd38",
+              kind: Math.random() > 0.55 ? "spark" : "blood"
+            }));
+          }
+          playHitSound();
+          break;
+        }
+      }
+    }
+
+    draw(context) {
+      context.save();
+      context.globalAlpha = 0.26;
+      context.strokeStyle = "#ffcc48";
+      context.lineWidth = 9;
+      context.beginPath();
+      context.moveTo(Math.round(this.prevX), Math.round(this.prevY));
+      context.lineTo(Math.round(this.x), Math.round(this.y));
+      context.stroke();
+      context.globalAlpha = 0.88;
+      context.strokeStyle = "#ff8a20";
+      context.lineWidth = 4;
+      context.beginPath();
+      context.moveTo(Math.round(this.prevX), Math.round(this.prevY));
+      context.lineTo(Math.round(this.x), Math.round(this.y));
+      context.stroke();
+      context.globalAlpha = 1;
+      withTransform(context, this.x, this.y, this.angle, () => {
+        drawPixelOutlineRect(context, -4, -3, 11, 6, "#ffb12c", "#4c2105", "#fff4a4", "#b74709");
+        pixelRect(context, 5, -1, 5, 2, "#fff6b8");
+      });
+      context.restore();
+    }
+  }
+
+  class Coin {
+    constructor(x, y, value) {
+      this.x = x;
+      this.y = y;
+      this.value = value;
+      this.vx = rand(-1.2, 1.2);
+      this.vy = rand(-1.2, 1.2);
+      this.radius = 8;
+      this.life = 0;
+      this.collected = false;
+    }
+
+    update(dt, game) {
+      this.life += dt;
+      const player = game.player;
+      const d = dist(this.x, this.y, player.x, player.y);
+      if (d < 155) {
+        const a = angleTo(this.x, this.y, player.x, player.y);
+        const pull = d < 42 ? 7.2 : 3.4;
+        this.vx += Math.cos(a) * pull * dt;
+        this.vy += Math.sin(a) * pull * dt;
+      } else {
+        this.vx *= 0.96;
+        this.vy *= 0.96;
+      }
+      this.x += this.vx * 60 * dt;
+      this.y += this.vy * 60 * dt;
+
+      if (d < player.radius + this.radius) {
+        game.runCoins += this.value;
+        this.collected = true;
+        playCoinSound();
+        for (let i = 0; i < 6; i++) {
+          game.particles.push(new Particle(this.x, this.y, {
+            vx: rand(-1.6, 1.6),
+            vy: rand(-2.2, -0.2),
+            size: randInt(2, 4),
+            life: rand(0.2, 0.45),
+            color: "#ffd34d"
+          }));
+        }
+      }
+    }
+
+    draw(context) {
+      const bob = Math.sin(this.life * 8) * 2;
+      drawPixelShadow(context, this.x + 1, this.y + 8, 16, 7, 0.28);
+      drawPixelOutlineRect(context, this.x - 7, this.y - 8 + bob, 14, 14, "#b97800", "#090603", "#ffe47a", "#6c3a05");
+      pixelRect(context, this.x - 4, this.y - 6 + bob, 9, 9, "#ffd34d");
+      pixelRect(context, this.x - 1, this.y - 4 + bob, 3, 6, "#fff2a8");
+      pixelRect(context, this.x + 4, this.y + 3 + bob, 3, 3, "#8a4b06");
+    }
+  }
+
+  class PoisonPool {
+    constructor(x, y) {
+      this.x = x;
+      this.y = y;
+      this.radius = 70;
+      this.duration = 5;
+      this.maxDuration = 5;
+      this.damage = 4;
+      this.tickInterval = 0.5;
+      this.tickTimer = 0;
+      this.bubbles = Array.from({ length: 18 }, () => ({
+        x: rand(-58, 58),
+        y: rand(-34, 34),
+        size: randInt(2, 7),
+        phase: rand(0, Math.PI * 2)
+      }));
+      this.alive = true;
+    }
+
+    update(dt, game) {
+      this.duration -= dt;
+      this.tickTimer -= dt;
+      if (this.duration <= 0) {
+        this.alive = false;
+        return;
+      }
+      const d = dist(this.x, this.y, game.player.x, game.player.y);
+      if (d < this.radius + game.player.radius && this.tickTimer <= 0) {
+        game.player.takeDamage(this.damage, game);
+        this.tickTimer = this.tickInterval;
+      }
+      if (Math.random() < dt * 4) {
+        const a = rand(0, Math.PI * 2);
+        const r = rand(8, this.radius * 0.85);
+        game.particles.push(new Particle(this.x + Math.cos(a) * r, this.y + Math.sin(a) * r * 0.55, {
+          vx: rand(-0.25, 0.25),
+          vy: rand(-0.55, -0.1),
+          size: randInt(2, 5),
+          life: rand(0.35, 0.8),
+          color: "#74d943",
+          kind: "blood"
+        }));
+      }
+    }
+
+    draw(context) {
+      const alpha = clamp(this.duration / this.maxDuration, 0, 1);
+      context.save();
+      context.globalAlpha = alpha * 0.72;
+      drawPixelShadow(context, this.x, this.y + 4, this.radius * 1.8, this.radius * 0.9, 0.28);
+      context.fillStyle = "rgba(59, 154, 46, 0.34)";
+      context.beginPath();
+      context.ellipse(this.x, this.y, this.radius, this.radius * 0.55, 0, 0, Math.PI * 2);
+      context.fill();
+      context.strokeStyle = "rgba(126, 232, 74, 0.46)";
+      context.lineWidth = 3;
+      context.beginPath();
+      context.ellipse(this.x, this.y, this.radius, this.radius * 0.55, 0, 0, Math.PI * 2);
+      context.stroke();
+      for (const bubble of this.bubbles) {
+        const pulse = Math.sin(performance.now() * 0.004 + bubble.phase) > 0 ? 1 : 0;
+        pixelRect(context, this.x + bubble.x, this.y + bubble.y, bubble.size + pulse, Math.max(2, bubble.size - 1), bubble.phase > 3 ? "#193d20" : "#78df45");
+      }
+      context.restore();
+    }
+  }
+
+  class Zombie {
+    constructor(type, x, y, difficultyLevel = 1) {
+      const defs = {
+        normal: { hp: 50, speed: 1.0, maxSpeed: 2.0, radius: 15, reward: 5, skin: "#9ead70", shirt: "#34463b", pants: "#263238", damage: 10 },
+        fast: { hp: 35, speed: 1.6, maxSpeed: 2.6, radius: 12, reward: 8, skin: "#b4d47c", shirt: "#40503a", pants: "#1f2d2e", damage: 8 },
+        tank: { hp: 160, speed: 0.65, maxSpeed: 1.45, radius: 24, reward: 15, skin: "#8fa36c", shirt: "#59644e", pants: "#263238", damage: 18 },
+        redEye: { hp: 60, speed: 2.0, maxSpeed: 3.2, radius: 13, reward: 12, skin: "#6f8f5a", shirt: "#1f3028", pants: "#182526", damage: 12 },
+        armored: { hp: 260, speed: 0.55, maxSpeed: 1.25, radius: 22, reward: 25, skin: "#88907d", shirt: "#626a67", pants: "#293032", damage: 20 },
+        exploder: { hp: 70, speed: 1.1, maxSpeed: 1.85, radius: 16, reward: 18, skin: "#9a8d54", shirt: "#673026", pants: "#2a2721", damage: 35 },
+        poison: { hp: 80, speed: 0.9, maxSpeed: 1.75, radius: 16, reward: 16, skin: "#7bdc4a", shirt: "#25422d", pants: "#202729", damage: 10 }
+      };
+      const normalizedType = type === "fat" ? "tank" : type;
+      Object.assign(this, defs[normalizedType] || defs.normal);
+      this.type = normalizedType;
+      this.x = x;
+      this.y = y;
+      const hpGrowth = this.type === "armored" ? 0.11 : 0.08;
+      this.hp = Math.round(this.hp * (1 + difficultyLevel * hpGrowth));
+      this.speed = Math.min(this.speed * (1 + difficultyLevel * 0.035), this.maxSpeed);
+      this.maxHp = this.hp;
+      this.alive = true;
+      this.hitFlash = 0;
+      this.attackTimer = rand(0, 0.25);
+      this.walk = rand(0, Math.PI * 2);
+      this.angle = 0;
+      this.exploding = false;
+      this.explodeTimer = 0;
+      this.explodeDelay = 1.2;
+      this.explodeRadius = 90;
+      this.exploded = false;
+      this.trailTimer = 0;
+    }
+
+    update(dt, game) {
+      if (!this.alive) return;
+      if (this.type === "exploder") this.updateExploder(dt, game);
+      const player = game.player;
+      this.angle = angleTo(this.x, this.y, player.x, player.y);
+      const slowed = this.exploding ? 0.22 : 1;
+      const wobbleSpeed = this.type === "redEye" ? 18 : this.type === "fast" ? 12 : 7;
+      const wobble = Math.sin(game.elapsed * wobbleSpeed + this.walk) * 0.28;
+      this.x += Math.cos(this.angle + wobble) * this.speed * slowed * 60 * dt;
+      this.y += Math.sin(this.angle + wobble) * this.speed * slowed * 60 * dt;
+      this.hitFlash = Math.max(0, this.hitFlash - dt);
+      this.attackTimer -= dt;
+
+      if (this.type === "redEye") {
+        this.trailTimer -= dt;
+        if (this.trailTimer <= 0) {
+          this.trailTimer = 0.08;
+          game.particles.push(new Particle(this.x - Math.cos(this.angle) * 12, this.y - Math.sin(this.angle) * 12, {
+            vx: rand(-0.2, 0.2),
+            vy: rand(-0.2, 0.2),
+            size: randInt(3, 6),
+            life: 0.25,
+            color: "#5b1114",
+            kind: "smoke"
+          }));
+        }
+      }
+
+      if (dist(this.x, this.y, player.x, player.y) < this.radius + player.radius - 2 && this.attackTimer <= 0 && !this.exploding) {
+        player.takeDamage(this.damage, game);
+        this.attackTimer = 0.6;
+      }
+    }
+
+    startExplode(game) {
+      if (this.exploding || this.exploded) return;
+      this.exploding = true;
+      this.explodeTimer = this.explodeDelay;
+      game.shake = Math.max(game.shake, 3);
+    }
+
+    updateExploder(dt, game) {
+      const playerDistance = dist(this.x, this.y, game.player.x, game.player.y);
+      if (playerDistance < 90) this.startExplode(game);
+      if (!this.exploding) return;
+      this.explodeTimer -= dt;
+      if (Math.random() < dt * 18) {
+        game.particles.push(new Particle(this.x + rand(-10, 10), this.y + rand(-10, 10), {
+          vx: rand(-0.45, 0.45),
+          vy: rand(-0.45, 0.45),
+          size: randInt(3, 7),
+          life: 0.22,
+          color: Math.random() > 0.5 ? "#ff4b22" : "#ffb22a",
+          kind: "spark"
+        }));
+      }
+      if (this.explodeTimer <= 0) this.explode(game);
+    }
+
+    explode(game) {
+      if (this.exploded) return;
+      this.exploded = true;
+      this.alive = false;
+      game.shake = Math.max(game.shake, 14);
+      if (dist(this.x, this.y, game.player.x, game.player.y) < this.explodeRadius + game.player.radius) {
+        game.player.takeDamage(35, game);
+      }
+      for (const zombie of game.zombies) {
+        if (zombie !== this && zombie.alive && dist(this.x, this.y, zombie.x, zombie.y) < this.explodeRadius + zombie.radius) {
+          zombie.takeDamage(45, game);
+        }
+      }
+      for (let i = 0; i < 42; i++) {
+        const a = rand(0, Math.PI * 2);
+        const s = rand(1.2, 5.2);
+        game.particles.push(new Particle(this.x, this.y, {
+          vx: Math.cos(a) * s,
+          vy: Math.sin(a) * s,
+          size: randInt(3, 8),
+          life: rand(0.24, 0.75),
+          color: Math.random() > 0.5 ? "#ff5a22" : "#ffb02a",
+          kind: Math.random() > 0.38 ? "spark" : "chunk"
+        }));
+      }
+      playZombieDeathSound();
+    }
+
+    takeDamage(amount, game) {
+      let finalDamage = amount;
+      if (this.type === "armored") {
+        finalDamage *= 0.8;
+        for (let i = 0; i < 6; i++) {
+          game.particles.push(new Particle(this.x + rand(-10, 10), this.y + rand(-10, 10), {
+            vx: rand(-2.2, 2.2),
+            vy: rand(-2.2, 2.2),
+            size: randInt(2, 4),
+            life: rand(0.15, 0.35),
+            color: Math.random() > 0.5 ? "#f8f0c6" : "#ffd45a",
+            kind: "spark"
+          }));
+        }
+      }
+      this.hp -= finalDamage;
+      this.hitFlash = 0.08;
+      if (this.hp <= 0) this.die(game);
+    }
+
+    die(game) {
+      if (!this.alive) return;
+      if (this.type === "exploder" && !this.exploded) {
+        game.kills += 1;
+        game.coins.push(new Coin(this.x + rand(-8, 8), this.y + rand(-8, 8), this.reward));
+        this.explode(game);
+        return;
+      }
+      this.alive = false;
+      game.kills += 1;
+      game.coins.push(new Coin(this.x + rand(-8, 8), this.y + rand(-8, 8), this.reward));
+      if (this.type === "poison") game.poisonPools.push(new PoisonPool(this.x, this.y));
+      const count = this.type === "tank" || this.type === "armored" ? 34 : 20;
+      for (let i = 0; i < count; i++) {
+        const a = rand(0, Math.PI * 2);
+        const s = rand(0.6, this.type === "tank" || this.type === "armored" ? 3.9 : 2.9);
+        const poison = this.type === "poison";
+        game.particles.push(new Particle(this.x, this.y, {
+          vx: Math.cos(a) * s,
+          vy: Math.sin(a) * s,
+          size: randInt(2, this.type === "tank" || this.type === "armored" ? 7 : 5),
+          life: rand(0.28, 0.9),
+          color: poison ? "#6fe33f" : Math.random() > 0.5 ? "#5ea638" : "#6d1610",
+          kind: Math.random() > 0.25 ? "blood" : "chunk"
+        }));
+      }
+      playZombieDeathSound();
+    }
+
+    draw(context, elapsed, renderAlpha = 1) {
+      const scale = this.type === "tank" || this.type === "armored" ? 1.32 : this.type === "fast" || this.type === "redEye" ? 0.86 : 1;
+      const step = Math.sin(elapsed * (this.type === "redEye" ? 18 : this.type === "fast" ? 16 : 9) + this.walk);
+      const skinPalettes = {
+        normal: ["#4f6041", "#8ea66a", "#c2d68b"],
+        fast: ["#557044", "#a6c872", "#d6ef91"],
+        tank: ["#566144", "#8fa36c", "#c1cf8c"],
+        redEye: ["#2b3d30", "#6f8f5a", "#a6c36d"],
+        armored: ["#535b56", "#88907d", "#c8c8b8"],
+        exploder: ["#554126", "#9a8d54", "#d6bd6b"],
+        poison: ["#23512a", "#62c83d", "#a6f56d"]
+      };
+      const skinPalette = skinPalettes[this.type] || skinPalettes.normal;
+      const colorSkin = this.hitFlash > 0 ? "#f2f2c8" : skinPalette[1];
+      const skinDark = skinPalette[0];
+      const skinLight = this.hitFlash > 0 ? "#fff5b2" : skinPalette[2];
+      context.save();
+      context.globalAlpha *= renderAlpha;
+      if (this.type === "exploder" && this.exploding) {
+        context.globalAlpha *= 0.8 + Math.sin(elapsed * 28) * 0.2;
+        context.strokeStyle = "rgba(255, 70, 22, 0.65)";
+        context.lineWidth = 3;
+        context.beginPath();
+        context.ellipse(this.x, this.y, this.explodeRadius, this.explodeRadius * 0.58, 0, 0, Math.PI * 2);
+        context.stroke();
+      }
+      drawPixelShadow(context, this.x + 2, this.y + this.radius * 0.72, this.radius * 2.35, this.radius * 0.8, 0.34);
+      withTransform(context, this.x, this.y, this.angle, () => {
+        const shirt = this.hitFlash > 0 ? "#fff0a8" : this.shirt;
+        const bulky = this.type === "tank" || this.type === "armored";
+        const slim = this.type === "fast" || this.type === "redEye";
+        const bodyW = bulky ? 34 : slim ? 17 : 23;
+        const bodyH = bulky ? 30 : slim ? 25 : 27;
+        const headScale = bulky ? 1.12 : slim ? 0.86 : 1;
+        const lean = this.type === "fast" || this.type === "redEye" ? -4 : 0;
+        const clothPalette = { outline: "#050606", clothMid: shirt, clothLight: "#778766", clothDark: "#202922" };
+        const skinLimb = { outline: "#050606", mid: colorSkin, light: skinLight, dark: skinDark };
+        const pantsLimb = { outline: "#050606", mid: "#1b2628", light: "#3b4741", dark: "#080d0e" };
+
+        drawIsoLimb(context, -9 * scale + lean, 10 * scale + step, 8 * scale, 14 * scale, pantsLimb, slim ? -0.42 : -0.12);
+        drawIsoLimb(context, 4 * scale + lean, 10 * scale - step, 8 * scale, 14 * scale, pantsLimb, slim ? 0.36 : 0.12);
+        pixelRect(context, -11 * scale + lean, 21 * scale + step, 12 * scale, 4 * scale, "#090b0b");
+        pixelRect(context, 4 * scale + lean, 21 * scale - step, 12 * scale, 4 * scale, "#090b0b");
+        drawIsoLimb(context, -bodyW / 2 + lean - 9, -7 * scale + step, 7, 19 * scale, skinLimb, slim ? -0.35 : -0.18);
+        drawIsoLimb(context, bodyW / 2 + lean + 1, -8 * scale - step, 7, 19 * scale, skinLimb, slim ? 0.32 : 0.16);
+        drawIsoTorso(context, -bodyW / 2 + lean, -12 * scale, bodyW, bodyH, clothPalette, { slant: bulky ? 8 : 6 });
+        pixelRect(context, -bodyW / 2 + lean + 2, -10 * scale, 7, 5, "#7f9161");
+        pixelRect(context, bodyW / 2 + lean - 8, 7 * scale, 6, 8, "#17211b");
+        if (this.type === "tank") {
+          drawIsoTorso(context, -18, -4, 36, 24, {
+            outline: "#050606",
+            clothMid: "#7f8f64",
+            clothLight: "#b9c987",
+            clothDark: "#424b36"
+          }, { slant: 9 });
+          pixelRect(context, -12, 0, 18, 5, "#aebf82");
+          pixelRect(context, 8, 7, 8, 9, "#3b4431");
+          pixelRect(context, -15, 11, 8, 5, "#5e2218");
+        }
+        if (this.type === "armored") {
+          pixelRect(context, -14, -11, 28, 11, "#9aa19d");
+          pixelRect(context, -12, -9, 10, 4, "#d3d5c8");
+          pixelRect(context, -11, 2, 23, 12, "#5e6764");
+          pixelRect(context, 5, -8, 8, 20, "#303738");
+          pixelRect(context, -13, 7, 7, 5, "#a4aaa4");
+        }
+        if (this.type === "exploder") {
+          pixelRect(context, -8, -8, 16, 5, "#e25121");
+          pixelRect(context, -3, -4, 6, 15, "#ff9c22");
+          pixelRect(context, 5, -9, 5, 5, "#ffdc63");
+        }
+        if (this.type === "poison") {
+          pixelRect(context, -10, -7, 6, 18, "#57c936");
+          pixelRect(context, 5, 3, 6, 8, "#9af05a");
+          pixelRect(context, -1, -9, 5, 5, "#b7ff77");
+        }
+        pixelRect(context, -bodyW / 2 + lean + 3, -8 * scale, 5, bodyH - 4, "#1b2b2d");
+        pixelRect(context, bodyW / 2 + lean - 7, -4 * scale, 5, bodyH - 7, "#202a26");
+        drawIsoHead(context, 3 * scale + lean, -22 * scale, headScale, {
+          outline: "#050606",
+          skinMid: colorSkin,
+          skinLight,
+          skinDark,
+          hairDark: "#2a2418",
+          hairMid: "#47331f",
+          hairLight: "#6d512e",
+          mouth: "#301413"
+        }, {
+          eye: this.type === "redEye" ? "#ff1e22" : "#e8e6b5",
+          eyeGlow: this.type === "redEye" ? "rgba(255,0,0,0.35)" : null
+        });
+        const eye = this.type === "redEye" ? "#ff1e22" : "#e8e6b5";
+        pixelRect(context, 8 * scale + lean, -14 * scale, 3 * scale, 3 * scale, eye);
+        pixelRect(context, 15 * scale + lean, -13 * scale, 3 * scale, 3 * scale, eye);
+        if (this.type === "redEye") {
+          pixelRect(context, 7 * scale + lean, -15 * scale, 5 * scale, 5 * scale, "rgba(255,0,0,0.35)");
+          pixelRect(context, 14 * scale + lean, -14 * scale, 5 * scale, 5 * scale, "rgba(255,0,0,0.35)");
+        }
+        pixelRect(context, -bodyW / 2 + lean + 3, -9 * scale, 4, 4, "#6d1712");
+        pixelRect(context, bodyW / 2 + lean - 8, 9 * scale, 5, 3, "#6d1712");
+        if (slim) {
+          pixelRect(context, -10, -18, 5, 6, this.type === "redEye" ? "#641414" : "#89c15d");
+          pixelRect(context, -2, 13, 4, 7, this.type === "redEye" ? "#7d1919" : "#8fd163");
+        }
+      });
+
+      const w = this.radius * 2;
+      const y = this.y - this.radius - 14;
+      drawPixelOutlineRect(context, this.x - w / 2 - 1, y - 1, w + 2, 6, "#111", "#050505");
+      pixelRect(context, this.x - w / 2, y + 1, w * clamp(this.hp / this.maxHp, 0, 1), 2, this.type === "armored" ? "#c8c8b8" : "#df3028");
+      context.restore();
+    }
+  }
+
+  class Player {
+    constructor(game) {
+      this.x = game.width / 2;
+      this.y = game.height / 2;
+      this.radius = 14;
+      this.aimAngle = 0;
+      this.moveAngle = 0;
+      this.walk = 0;
+      this.hurtFlash = 0;
+      this.dashCooldown = 0;
+      this.maxDashCooldown = 3;
+      this.reloading = false;
+      this.reloadTimer = 0;
+      this.fireTimer = 0;
+      this.applyUpgrades(game.save.upgrades);
+      this.hp = this.maxHp;
+      this.ammo = this.magSize;
+    }
+
+    applyUpgrades(upgrades) {
+      this.damage = 25 + (upgrades.damage - 1) * 5;
+      this.fireInterval = Math.max(0.1, 0.25 - (upgrades.fireRate - 1) * 0.017);
+      this.maxHp = 100 + (upgrades.maxHp - 1) * 20;
+      this.speed = 3.2 + (upgrades.speed - 1) * 0.15;
+      this.baseMagazineSize = 12;
+      this.magSize = this.baseMagazineSize + ((upgrades.magazine || 1) - 1) * 3;
+      this.reloadDuration = 1.5;
+      this.bulletSpeed = 9;
+    }
+
+    update(dt, game) {
+      const input = game.input;
+      this.aimAngle = angleTo(this.x, this.y, game.mouse.x, game.mouse.y);
+      this.fireTimer = Math.max(0, this.fireTimer - dt);
+      this.dashCooldown = Math.max(0, this.dashCooldown - dt);
+      this.hurtFlash = Math.max(0, this.hurtFlash - dt);
+
+      let mx = 0;
+      let my = 0;
+      if (input.keys.has("w")) my -= 1;
+      if (input.keys.has("s")) my += 1;
+      if (input.keys.has("a")) mx -= 1;
+      if (input.keys.has("d")) mx += 1;
+      if (input.keys.has("arrowup")) my -= 1;
+      if (input.keys.has("arrowdown")) my += 1;
+      if (input.keys.has("arrowleft")) mx -= 1;
+      if (input.keys.has("arrowright")) mx += 1;
+      if (game.touch.moveActive) {
+        mx = game.touch.moveVector.x;
+        my = game.touch.moveVector.y;
+      }
+      const moving = mx !== 0 || my !== 0;
+      if (moving) {
+        const len = Math.hypot(mx, my);
+        mx /= len;
+        my /= len;
+        this.moveAngle = Math.atan2(my, mx);
+        if (game.touch.moveActive && !game.touch.fireDown) this.aimAngle = this.moveAngle;
+        this.x += mx * this.speed * 60 * dt;
+        this.y += my * this.speed * 60 * dt;
+        this.walk += dt * 12;
+      }
+
+      if (game.touch.fireDown) {
+        const target = game.getAimAssistTarget();
+        if (target) this.aimAngle = angleTo(this.x, this.y, target.x, target.y);
+        else if (moving) this.aimAngle = this.moveAngle;
+      }
+
+      this.x = clamp(this.x, this.radius, game.width - this.radius);
+      this.y = clamp(this.y, this.radius, game.height - this.radius);
+
+      const dashRequested = input.consume(" ") || game.touch.dashQueued;
+      game.touch.dashQueued = false;
+      if (dashRequested && this.dashCooldown <= 0) this.dash(game, mx, my);
+      const reloadRequested = input.consume("r") || game.touch.reloadQueued;
+      game.touch.reloadQueued = false;
+      if (reloadRequested) this.reload();
+      if (this.reloading) {
+        this.reloadTimer -= dt;
+        if (this.reloadTimer <= 0) {
+          this.reloading = false;
+          this.ammo = this.magSize;
+        }
+      }
+
+      if (game.mouse.down || game.touch.fireDown) this.shoot(game);
+    }
+
+    dash(game, mx, my) {
+      let dx = mx;
+      let dy = my;
+      if (dx === 0 && dy === 0) {
+        dx = Math.cos(this.aimAngle);
+        dy = Math.sin(this.aimAngle);
+      }
+      for (let i = 0; i < 12; i++) {
+        game.particles.push(new Particle(this.x + rand(-9, 9), this.y + rand(-9, 9), {
+          vx: -dx * rand(0.4, 1.5) + rand(-0.4, 0.4),
+          vy: -dy * rand(0.4, 1.5) + rand(-0.4, 0.4),
+          size: randInt(2, 4),
+          life: rand(0.18, 0.4),
+          color: "#aeb8ab"
+        }));
+      }
+      this.x = clamp(this.x + dx * 112, this.radius, game.width - this.radius);
+      this.y = clamp(this.y + dy * 112, this.radius, game.height - this.radius);
+      this.dashCooldown = this.maxDashCooldown;
+      game.shake = Math.max(game.shake, 5);
+    }
+
+    shoot(game) {
+      if (this.reloading || this.fireTimer > 0 || this.ammo <= 0) return;
+      this.fireTimer = this.fireInterval;
+      this.ammo -= 1;
+      const muzzleX = this.x + Math.cos(this.aimAngle) * 24;
+      const muzzleY = this.y + Math.sin(this.aimAngle) * 24;
+      game.bullets.push(new Bullet(muzzleX, muzzleY, this.aimAngle, this.damage));
+      game.particles.push(new Particle(muzzleX, muzzleY, {
+        vx: 0,
+        vy: 0,
+        size: 6,
+        life: 0.055,
+        color: "#ffed77",
+        kind: "muzzle",
+        angle: this.aimAngle
+      }));
+      for (let i = 0; i < 9; i++) {
+        game.particles.push(new Particle(muzzleX, muzzleY, {
+          vx: Math.cos(this.aimAngle) * rand(1, 3) + rand(-0.7, 0.7),
+          vy: Math.sin(this.aimAngle) * rand(1, 3) + rand(-0.7, 0.7),
+          size: randInt(2, 6),
+          life: rand(0.05, 0.18),
+          color: Math.random() > 0.45 ? "#ffed77" : "#ff7f1d",
+          kind: "spark"
+        }));
+      }
+      game.shake = Math.max(game.shake, 2.2);
+      playShootSound();
+    }
+
+    reload() {
+      if (this.reloading || this.ammo === this.magSize) return;
+      this.reloading = true;
+      this.reloadTimer = this.reloadDuration;
+    }
+
+    takeDamage(amount, game) {
+      this.hp = Math.max(0, this.hp - amount);
+      this.hurtFlash = 0.22;
+      game.damageFlash = 0.34;
+      game.shake = Math.max(game.shake, 8);
+      playPlayerHurtSound();
+      if (this.hp <= 0) game.endGame();
+    }
+
+    draw(context) {
+      const step = Math.sin(this.walk) * 2;
+      const bodyAngle = this.aimAngle * 0.7 + this.moveAngle * 0.3;
+      drawSpriteFeetShadow(context, this.x + 2, this.y + 24, 44, 15, 0.44);
+      withTransform(context, this.x, this.y, bodyAngle, () => {
+        const palette = {
+          outline: "#050606",
+          skinDark: "#7c4a2e",
+          skinMid: "#c8874d",
+          skinLight: "#e8b978",
+          hairDark: "#1a0f08",
+          hairMid: "#3e2412",
+          hairLight: "#7a4a22",
+          mouth: "#64291f",
+          clothDark: this.hurtFlash > 0 ? "#44100d" : "#0f1b1f",
+          clothMid: this.hurtFlash > 0 ? "#8f3028" : "#29434b",
+          clothLight: this.hurtFlash > 0 ? "#d4634d" : "#668790"
+        };
+        const clothPalette = {
+          outline: palette.outline,
+          clothDark: palette.clothDark,
+          clothMid: palette.clothMid,
+          clothLight: palette.clothLight
+        };
+        const bootPalette = { outline: palette.outline, mid: "#172429", light: "#40555a", dark: "#070d0f" };
+        const skinPalette = { outline: palette.outline, mid: palette.skinMid, light: palette.skinLight, dark: palette.skinDark };
+
+        drawIsoLimb(context, -12, 8 + step, 8, 15, bootPalette, -0.08);
+        drawIsoLimb(context, 4, 9 - step, 8, 15, bootPalette, 0.08);
+        pixelRect(context, -13, 22 + step, 12, 5, "#080b0c");
+        pixelRect(context, 4, 22 - step, 12, 5, "#080b0c");
+        drawIsoLimb(context, -17, -8, 7, 21, { outline: palette.outline, mid: "#4d3929", light: "#806247", dark: "#1d1510" }, -0.12);
+        drawIsoLimb(context, 9, -7, 8, 20, skinPalette, 0.08);
+        drawIsoTorso(context, -13, -12, 27, 29, clothPalette, { slant: 7 });
+        pixelRect(context, -8, -9, 7, 22, palette.clothDark);
+        pixelRect(context, 4, -5, 6, 17, "#182b31");
+        pixelRect(context, -10, -11, 9, 5, "#7a98a0");
+        pixelRect(context, -6, -1, 4, 4, "#8c642e");
+        pixelRect(context, 4, 4, 4, 4, "#8c642e");
+        drawIsoHead(context, -8, -28, 1, palette);
+        pixelRect(context, -10, -22, 4, 5, palette.hairDark);
+        pixelRect(context, 6, -23, 3, 9, "#9d6239");
+        pixelRect(context, -7, -24, 3, 5, "#f0bf80");
+      });
+
+      withTransform(context, this.x, this.y, this.aimAngle, () => {
+        drawIsoLimb(context, 1, -6, 15, 9, { outline: "#050505", mid: "#c8874d", light: "#e8b978", dark: "#7c4a2e" }, 0);
+        drawIsoSpriteBlock(context, 12, -8, 28, 10, { outline: "#050606", mid: "#151b1d", light: "#7f898b", dark: "#070909" }, 4);
+        pixelRect(context, 17, -6, 17, 3, "#344043");
+        pixelRect(context, 23, -10, 8, 3, "#9aa4a4");
+        pixelRect(context, 36, -6, 12, 4, "#748082");
+        pixelRect(context, 42, -4, 6, 2, "#c5cdca");
+        pixelRect(context, 18, 2, 7, 9, "#080909");
+      });
+
+      drawPixelOutlineRect(context, this.x - 18, this.y + 25, 36, 6, "#151515", "#050505");
+      pixelRect(context, this.x - 16, this.y + 27, 32 * clamp(this.hp / this.maxHp, 0, 1), 2, "#54e247");
+    }
+  }
+
+  class MapDecoration {
+    constructor(type, x, y, scale = 1, rotation = 0) {
+      this.type = type;
+      this.x = x;
+      this.y = y;
+      this.scale = scale;
+      this.rotation = rotation;
+      this.seed = Math.random();
+      this.bits = Array.from({ length: 10 }, () => ({
+        x: rand(-14, 14),
+        y: rand(-12, 12),
+        w: randInt(2, 7),
+        h: randInt(2, 12),
+        alt: Math.random() > 0.5
+      }));
+    }
+
+    draw(context) {
+      withTransform(context, this.x, this.y, this.rotation, () => {
+        context.scale(this.scale, this.scale);
+        const t = this.type;
+        if (t === "car" || t === "police") this.drawCar(context, t === "police");
+        if (t === "crate") this.drawCrate(context);
+        if (t === "barrel") this.drawBarrel(context);
+        if (t === "trash") this.drawTrash(context);
+        if (t === "barricade") this.drawBarricade(context);
+        if (t === "lamp") this.drawLamp(context);
+        if (t === "grass") this.drawGrass(context);
+        if (t === "rocks") this.drawRocks(context);
+        if (t === "tire") this.drawTire(context);
+        if (t === "cone") this.drawCone(context);
+        if (t === "blood") this.drawBlood(context);
+        if (t === "crack") this.drawCrack(context);
+      });
+    }
+
+    drawCar(context, police) {
+      const base = police ? "#222d35" : this.seed > 0.5 ? "#234252" : "#5a2b22";
+      drawPixelShadow(context, 3, 18, 68, 22, 0.42);
+      drawPixelOutlineRect(context, -29, -12, 58, 29, "#101313", "#050505");
+      drawPixelOutlineRect(context, -25, -17, 50, 26, base, "#050606", "#426373", "#1b2528");
+      drawPixelOutlineRect(context, -13, -22, 28, 14, "#1a2326", "#050606", "#506167", "#0d1112");
+      pixelRect(context, -20, 7, 12, 8, "#050606");
+      pixelRect(context, 12, 7, 12, 8, "#050606");
+      pixelRect(context, -18, 9, 8, 4, "#242928");
+      pixelRect(context, 14, 9, 8, 4, "#242928");
+      pixelRect(context, -23, -10, 10, 5, "#344d58");
+      pixelRect(context, 12, -10, 10, 5, "#344d58");
+      pixelRect(context, -26, 0, 8, 7, "#61211a");
+      pixelRect(context, 18, -16, 6, 4, "#0c0d0d");
+      pixelRect(context, -7, 9, 12, 4, "#371712");
+      if (police) {
+        pixelRect(context, -2, -20, 5, 4, "#cc2421");
+        pixelRect(context, 4, -20, 5, 4, "#246bd1");
+        pixelRect(context, -18, -16, 36, 5, "#f1eee1");
+      }
+    }
+
+    drawCrate(context) {
+      drawPixelShadow(context, 2, 18, 37, 13, 0.38);
+      drawIsoBox(context, 0, -8, 34, 24, 10, "#b87935", "#7a471f", "#4d2d18");
+      pixelRect(context, -14, -4, 28, 4, "#5c3518");
+      pixelRect(context, -2, -13, 4, 28, "#5c3518");
+      pixelRect(context, -12, -16, 8, 3, "#d19a52");
+      pixelRect(context, 5, 8, 7, 3, "#2a180d");
+    }
+
+    drawBarrel(context) {
+      const c = this.seed > 0.5 ? "#994325" : "#53602e";
+      drawPixelShadow(context, 2, 15, 24, 9, 0.36);
+      drawPixelOutlineRect(context, -10, -14, 20, 29, c, "#050505", "#c56a34", "#321b16");
+      pixelRect(context, -8, -16, 16, 5, "#151515");
+      pixelRect(context, -6, -17, 12, 3, this.seed > 0.5 ? "#d07131" : "#6f7f3a");
+      pixelRect(context, -8, -7, 16, 4, "#c77729");
+      pixelRect(context, -8, 5, 16, 4, "#39241c");
+      pixelRect(context, 4, -10, 3, 18, "rgba(255,255,255,0.16)");
+      pixelRect(context, -7, 9, 5, 3, "#652317");
+    }
+
+    drawTrash(context) {
+      drawPixelShadow(context, 1, 17, 31, 11, 0.35);
+      drawPixelOutlineRect(context, -13, -13, 26, 28, "#4b5755", "#060707", "#7d8a87", "#202829");
+      drawPixelOutlineRect(context, -16, -18, 32, 7, "#66736f", "#060707", "#9ba6a3", "#2f3735");
+      pixelRect(context, -8, -8, 4, 17, "#252d2d");
+      pixelRect(context, 5, -8, 4, 17, "#252d2d");
+      pixelRect(context, -11, 7, 6, 4, "#202726");
+    }
+
+    drawBarricade(context) {
+      drawPixelShadow(context, 2, 12, 58, 11, 0.34);
+      drawPixelOutlineRect(context, -27, -9, 54, 17, "#2c2118", "#050505", "#5c4630", "#100c09");
+      pixelRect(context, -24, -6, 48, 5, "#b57532");
+      pixelRect(context, -24, 3, 48, 5, "#b57532");
+      pixelRect(context, -18, -7, 12, 14, "#e7e0c9");
+      pixelRect(context, 8, -7, 12, 14, "#e7e0c9");
+      pixelRect(context, -8, -6, 9, 5, "#d66a22");
+      pixelRect(context, 17, 3, 7, 5, "#d66a22");
+    }
+
+    drawLamp(context) {
+      drawPixelShadow(context, 14, 12, 54, 8, 0.32);
+      drawPixelOutlineRect(context, -4, -48, 7, 62, "#242929", "#050606", "#596262", "#101313");
+      drawPixelOutlineRect(context, -6, 10, 12, 7, "#111313", "#050505", "#343939", "#050606");
+      drawPixelOutlineRect(context, -2, -49, 27, 5, "#242929", "#050606", "#596262", "#101313");
+      drawPixelOutlineRect(context, 19, -54, 10, 10, "#4b5050", "#050606", "#838b88", "#252b2b");
+      pixelRect(context, 21, -51, 5, 5, "#cab36a");
+    }
+
+    drawGrass(context) {
+      for (const bit of this.bits.slice(0, 8)) {
+        pixelRect(context, bit.x, bit.y, Math.min(bit.w, 4), bit.h, bit.alt ? "#394f25" : "#526b30");
+      }
+    }
+
+    drawRocks(context) {
+      for (const bit of this.bits.slice(0, 8)) {
+        pixelRect(context, bit.x, bit.y, Math.max(3, bit.w), Math.min(6, bit.h), bit.alt ? "#565954" : "#303432");
+      }
+    }
+
+    drawTire(context) {
+      drawPixelShadow(context, 1, 9, 27, 9, 0.3);
+      pixelRect(context, -13, -13, 26, 26, "#070707");
+      pixelRect(context, -10, -10, 20, 20, "#1a1d1c");
+      pixelRect(context, -6, -6, 12, 12, "#303432");
+      pixelRect(context, -3, -3, 6, 6, "#070707");
+      pixelRect(context, -9, -10, 12, 3, "#3b403e");
+    }
+
+    drawCone(context) {
+      drawPixelShadow(context, 1, 12, 19, 7, 0.28);
+      drawPixelOutlineRect(context, -8, 8, 16, 5, "#221510", "#050505", "#5a3c20", "#080504");
+      drawPixelOutlineRect(context, -6, -10, 12, 20, "#d66a22", "#050505", "#ff9c46", "#7b3210");
+      pixelRect(context, -4, -2, 8, 3, "#f2ead7");
+    }
+
+    drawBlood(context) {
+      pixelRect(context, -13, -5, 22, 10, "#681914");
+      pixelRect(context, 5, -12, 10, 8, "#42100e");
+      pixelRect(context, -19, 7, 8, 5, "#42100e");
+      pixelRect(context, -3, 6, 5, 4, "#8f2018");
+    }
+
+    drawCrack(context) {
+      context.strokeStyle = "#080a0a";
+      context.lineWidth = 2;
+      context.beginPath();
+      context.moveTo(-20, -5);
+      context.lineTo(-8, -2);
+      context.lineTo(0, -12);
+      context.lineTo(8, 1);
+      context.lineTo(22, 4);
+      context.stroke();
+      context.beginPath();
+      context.moveTo(0, -12);
+      context.lineTo(-3, -25);
+      context.moveTo(5, 0);
+      context.lineTo(4, 16);
+      context.stroke();
+    }
+  }
+
+  class InputState {
+    constructor() {
+      this.keys = new Set();
+      this.pressed = new Set();
+    }
+
+    down(key) {
+      const k = key.toLowerCase();
+      if (!this.keys.has(k)) this.pressed.add(k);
+      this.keys.add(k);
+    }
+
+    up(key) {
+      this.keys.delete(key.toLowerCase());
+    }
+
+    consume(key) {
+      const k = key.toLowerCase();
+      if (!this.pressed.has(k)) return false;
+      this.pressed.delete(k);
+      return true;
+    }
+
+    clearFrame() {
+      this.pressed.clear();
+    }
+  }
+
+  class Game {
+    constructor() {
+      this.canvas = canvas;
+      this.ctx = ctx;
+      this.width = window.innerWidth;
+      this.height = window.innerHeight;
+      this.state = "menu";
+      this.previousState = "menu";
+      this.input = new InputState();
+      this.mouse = { x: this.width / 2, y: this.height / 2, down: false };
+      this.touch = {
+        movePointerId: null,
+        moveVector: { x: 0, y: 0 },
+        moveActive: false,
+        fireDown: false,
+        dashQueued: false,
+        reloadQueued: false
+      };
+      this.save = this.loadSave();
+      this.decorations = [];
+      this.mapDetails = [];
+      this.bullets = [];
+      this.zombies = [];
+      this.particles = [];
+      this.coins = [];
+      this.poisonPools = [];
+      this.fogParticles = [];
+      this.elapsed = 0;
+      this.difficultyLevel = 1;
+      this.lastDifficultyLevel = 1;
+      this.difficultyNoticeTimer = 0;
+      this.difficultyNoticeText = "";
+      this.hordeTimer = 0;
+      this.hordeDuration = 10;
+      this.lastHordeTriggerTime = 0;
+      this.kills = 0;
+      this.runCoins = 0;
+      this.spawnTimer = 0;
+      this.shake = 0;
+      this.damageFlash = 0;
+      this.lastTime = performance.now();
+      this.bindEvents();
+      this.bindUI();
+      this.bindTouchControls();
+      this.resize();
+      this.generateDecorations();
+      this.initFogParticles();
+      this.updateMenuStats();
+      requestAnimationFrame((time) => this.loop(time));
+    }
+
+    loadSave() {
+      const upgrades = JSON.parse(localStorage.getItem(STORAGE_KEYS.upgrades) || "null") || {};
+      return {
+        totalCoins: Number(localStorage.getItem(STORAGE_KEYS.coins) || 0),
+        bestKills: Number(localStorage.getItem(STORAGE_KEYS.bestKills) || 0),
+        bestTime: Number(localStorage.getItem(STORAGE_KEYS.bestTime) || 0),
+        upgrades: {
+          damage: upgrades.damage || 1,
+          fireRate: upgrades.fireRate || 1,
+          maxHp: upgrades.maxHp || 1,
+          speed: upgrades.speed || 1,
+          magazine: upgrades.magazine || upgrades.magazineLevel || 1
+        }
+      };
+    }
+
+    saveData() {
+      localStorage.setItem(STORAGE_KEYS.coins, String(this.save.totalCoins));
+      localStorage.setItem(STORAGE_KEYS.bestKills, String(this.save.bestKills));
+      localStorage.setItem(STORAGE_KEYS.bestTime, String(this.save.bestTime));
+      localStorage.setItem(STORAGE_KEYS.upgrades, JSON.stringify(this.save.upgrades));
+    }
+
+    bindEvents() {
+      window.addEventListener("resize", () => this.resize());
+      window.addEventListener("keydown", (event) => {
+        if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.code)) event.preventDefault();
+        if (event.key === "Escape") {
+          if (this.state === "playing") this.pause();
+          else if (this.state === "paused") this.resume();
+          return;
+        }
+        this.input.down(event.key === " " ? " " : event.key);
+      });
+      window.addEventListener("keyup", (event) => this.input.up(event.key === " " ? " " : event.key));
+      window.addEventListener("mousemove", (event) => {
+        const rect = this.canvas.getBoundingClientRect();
+        this.mouse.x = (event.clientX - rect.left) * (this.width / rect.width);
+        this.mouse.y = (event.clientY - rect.top) * (this.height / rect.height);
+      });
+      window.addEventListener("mousedown", (event) => {
+        if (event.button === 0) {
+          audioBus.ensure();
+          this.mouse.down = true;
+        }
+      });
+      window.addEventListener("mouseup", (event) => {
+        if (event.button === 0) this.mouse.down = false;
+      });
+      window.addEventListener("blur", () => {
+        this.mouse.down = false;
+        this.resetTouchControls();
+        this.input.keys.clear();
+      });
+    }
+
+    bindTouchControls() {
+      const stick = document.getElementById("moveStick");
+      const knob = document.getElementById("moveKnob");
+      const fireButton = document.getElementById("fireTouchBtn");
+      const reloadButton = document.getElementById("reloadTouchBtn");
+      const dashButton = document.getElementById("dashTouchBtn");
+      if (!stick || !knob || !fireButton || !reloadButton || !dashButton) return;
+
+      const updateStick = (event) => {
+        const rect = stick.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+        const maxDistance = Math.min(rect.width, rect.height) * 0.32;
+        const dx = event.clientX - centerX;
+        const dy = event.clientY - centerY;
+        const distance = Math.hypot(dx, dy);
+        const limited = distance > maxDistance ? maxDistance / distance : 1;
+        const x = dx * limited;
+        const y = dy * limited;
+        knob.style.transform = `translate(${x}px, ${y}px)`;
+        this.touch.moveVector.x = clamp(dx / maxDistance, -1, 1);
+        this.touch.moveVector.y = clamp(dy / maxDistance, -1, 1);
+        if (Math.hypot(this.touch.moveVector.x, this.touch.moveVector.y) < 0.12) {
+          this.touch.moveVector.x = 0;
+          this.touch.moveVector.y = 0;
+        }
+      };
+
+      const clearStick = () => {
+        this.touch.movePointerId = null;
+        this.touch.moveActive = false;
+        this.touch.moveVector.x = 0;
+        this.touch.moveVector.y = 0;
+        knob.style.transform = "translate(0, 0)";
+      };
+
+      stick.addEventListener("pointerdown", (event) => {
+        if (this.state !== "playing" && this.state !== "paused") return;
+        event.preventDefault();
+        try {
+          stick.setPointerCapture(event.pointerId);
+        } catch {
+          // Synthetic touch checks may not create an active pointer capture target.
+        }
+        this.touch.movePointerId = event.pointerId;
+        this.touch.moveActive = true;
+        updateStick(event);
+      });
+      stick.addEventListener("pointermove", (event) => {
+        if (event.pointerId !== this.touch.movePointerId) return;
+        event.preventDefault();
+        updateStick(event);
+      });
+      const endStick = (event) => {
+        if (event.pointerId === this.touch.movePointerId) clearStick();
+      };
+      stick.addEventListener("pointerup", endStick);
+      stick.addEventListener("pointercancel", endStick);
+
+      const holdButton = (button, onDown, onUp = null) => {
+        button.addEventListener("pointerdown", (event) => {
+          if (this.state !== "playing" && this.state !== "paused") return;
+          event.preventDefault();
+          try {
+            button.setPointerCapture(event.pointerId);
+          } catch {
+            // Synthetic touch checks may not create an active pointer capture target.
+          }
+          button.classList.add("is-held");
+          audioBus.ensure();
+          onDown();
+        });
+        const release = () => {
+          button.classList.remove("is-held");
+          if (onUp) onUp();
+        };
+        button.addEventListener("pointerup", release);
+        button.addEventListener("pointercancel", release);
+        button.addEventListener("lostpointercapture", release);
+      };
+
+      holdButton(fireButton, () => {
+        this.touch.fireDown = true;
+      }, () => {
+        this.touch.fireDown = false;
+      });
+      holdButton(reloadButton, () => {
+        this.touch.reloadQueued = true;
+      });
+      holdButton(dashButton, () => {
+        this.touch.dashQueued = true;
+      });
+    }
+
+    resetTouchControls() {
+      this.touch.movePointerId = null;
+      this.touch.moveActive = false;
+      this.touch.fireDown = false;
+      this.touch.dashQueued = false;
+      this.touch.reloadQueued = false;
+      this.touch.moveVector.x = 0;
+      this.touch.moveVector.y = 0;
+      const knob = document.getElementById("moveKnob");
+      if (knob) knob.style.transform = "translate(0, 0)";
+      document.querySelectorAll(".touch-action.is-held").forEach((button) => button.classList.remove("is-held"));
+    }
+
+    bindUI() {
+      this.screens = {
+        menu: document.getElementById("menuScreen"),
+        upgrade: document.getElementById("upgradeScreen"),
+        gameover: document.getElementById("gameOverScreen")
+      };
+      document.getElementById("startBtn").addEventListener("click", () => this.startGame());
+      document.getElementById("upgradeBtn").addEventListener("click", () => this.showUpgrade());
+      document.getElementById("recordsBtn").addEventListener("click", () => this.updateMenuStats(true));
+      document.getElementById("backFromUpgradeBtn").addEventListener("click", () => this.showMenu());
+      document.getElementById("restartBtn").addEventListener("click", () => this.startGame());
+      document.getElementById("gameOverUpgradeBtn").addEventListener("click", () => this.showUpgrade());
+      document.getElementById("homeBtn").addEventListener("click", () => this.showMenu());
+    }
+
+    resize() {
+      const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+      this.width = window.innerWidth;
+      this.height = window.innerHeight;
+      this.canvas.width = Math.floor(this.width * dpr);
+      this.canvas.height = Math.floor(this.height * dpr);
+      this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.ctx.imageSmoothingEnabled = false;
+      if (this.player) {
+        this.player.x = clamp(this.player.x, this.player.radius, this.width - this.player.radius);
+        this.player.y = clamp(this.player.y, this.player.radius, this.height - this.player.radius);
+      }
+      if (!this.decorations.length || this.state !== "playing") this.generateDecorations();
+      this.initFogParticles();
+    }
+
+    setScreen(name) {
+      Object.values(this.screens).forEach((screen) => screen.classList.remove("active"));
+      if (this.screens[name]) this.screens[name].classList.add("active");
+    }
+
+    showMenu() {
+      this.state = "menu";
+      this.mouse.down = false;
+      this.resetTouchControls();
+      this.updateTouchVisibility();
+      this.generateDecorations();
+      this.updateMenuStats();
+      this.setScreen("menu");
+    }
+
+    showUpgrade() {
+      this.state = "upgrade";
+      this.mouse.down = false;
+      this.resetTouchControls();
+      this.updateTouchVisibility();
+      this.renderUpgrade();
+      this.setScreen("upgrade");
+    }
+
+    startGame() {
+      audioBus.ensure();
+      this.state = "playing";
+      this.resetTouchControls();
+      this.updateTouchVisibility();
+      this.setScreen(null);
+      this.elapsed = 0;
+      this.kills = 0;
+      this.runCoins = 0;
+      this.spawnTimer = 0.3;
+      this.shake = 0;
+      this.damageFlash = 0;
+      this.difficultyLevel = 1;
+      this.lastDifficultyLevel = 1;
+      this.difficultyNoticeTimer = 0;
+      this.hordeTimer = 0;
+      this.lastHordeTriggerTime = 0;
+      this.bullets = [];
+      this.zombies = [];
+      this.particles = [];
+      this.coins = [];
+      this.poisonPools = [];
+      this.player = new Player(this);
+      this.generateDecorations();
+      this.initFogParticles();
+      this.lastTime = performance.now();
+    }
+
+    pause() {
+      this.previousState = "playing";
+      this.state = "paused";
+      this.mouse.down = false;
+      this.updateTouchVisibility();
+    }
+
+    resume() {
+      this.state = "playing";
+      this.updateTouchVisibility();
+      this.lastTime = performance.now();
+    }
+
+    endGame() {
+      if (this.state === "gameover") return;
+      this.state = "gameover";
+      this.mouse.down = false;
+      this.resetTouchControls();
+      this.updateTouchVisibility();
+      this.save.totalCoins += this.runCoins;
+      this.save.bestKills = Math.max(this.save.bestKills, this.kills);
+      this.save.bestTime = Math.max(this.save.bestTime, Math.floor(this.elapsed));
+      this.saveData();
+      this.updateGameOver();
+      this.setScreen("gameover");
+    }
+
+    updateTouchVisibility() {
+      document.body.classList.toggle("game-active", this.state === "playing" || this.state === "paused");
+    }
+
+    updateMenuStats() {
+      document.getElementById("menuBestKills").textContent = this.save.bestKills;
+      document.getElementById("menuBestTime").textContent = formatTime(this.save.bestTime);
+      document.getElementById("menuTotalCoins").textContent = this.save.totalCoins;
+    }
+
+    updateGameOver() {
+      document.getElementById("finalTime").textContent = formatTime(this.elapsed);
+      document.getElementById("finalKills").textContent = this.kills;
+      document.getElementById("finalCoins").textContent = this.runCoins;
+      document.getElementById("finalBestKills").textContent = this.save.bestKills;
+      document.getElementById("finalBestTime").textContent = formatTime(this.save.bestTime);
+    }
+
+    renderUpgrade() {
+      document.getElementById("upgradeCoins").textContent = this.save.totalCoins;
+      const list = document.getElementById("upgradeList");
+      list.innerHTML = "";
+      Object.entries(UPGRADE_DEFS).forEach(([key, def]) => {
+        const level = this.save.upgrades[key];
+        const maxed = level >= def.max;
+        const cost = this.getUpgradeCost(key, level);
+        const canAfford = this.save.totalCoins >= cost;
+        const card = document.createElement("article");
+        card.className = "upgrade-card";
+        const valueText = this.getUpgradeValueText(key, level);
+        const nextText = maxed ? "已满级" : this.getUpgradeValueText(key, level + 1);
+        card.innerHTML = `
+          <div class="upgrade-icon">${this.getUpgradeIconHTML(key, def)}</div>
+          <div class="upgrade-info">
+            <h3>${def.name}</h3>
+            <p>等级 ${level}/${def.max}</p>
+            <p>${def.effect}</p>
+            <p>${valueText} ${maxed ? "" : "→ " + nextText}</p>
+            <p>${maxed ? "已满级" : "价格：" + cost + " 金币"}</p>
+          </div>
+        `;
+        const button = document.createElement("button");
+        button.className = "pixel-btn primary upgrade-buy";
+        if (maxed) button.textContent = "已满级";
+        else if (!canAfford) {
+          button.textContent = "金币不足";
+          button.classList.add("insufficient");
+        } else {
+          button.textContent = `价格：${cost} 金币`;
+        }
+        button.disabled = maxed || !canAfford;
+        button.addEventListener("click", () => this.buyUpgrade(key));
+        card.appendChild(button);
+        list.appendChild(card);
+      });
+    }
+
+    getUpgradeCost(key, level) {
+      const def = UPGRADE_DEFS[key];
+      if (def.costs) return def.costs[level - 1] || 0;
+      return def.baseCost * level;
+    }
+
+    getUpgradeIconHTML(key, def) {
+      if (key !== "magazine") return def.icon;
+      return `<span class="mag-icon"><i></i><i></i><i></i></span>`;
+    }
+
+    getUpgradeValueText(key, level) {
+      if (key === "damage") return String(25 + (level - 1) * 5);
+      if (key === "fireRate") return `${Math.max(0.1, 0.25 - (level - 1) * 0.017).toFixed(2)}s`;
+      if (key === "maxHp") return String(100 + (level - 1) * 20);
+      if (key === "magazine") return `${UPGRADE_DEFS.magazine.baseValue + (level - 1) * UPGRADE_DEFS.magazine.perLevel} 发`;
+      return (3.2 + (level - 1) * 0.15).toFixed(2);
+    }
+
+    buyUpgrade(key) {
+      const def = UPGRADE_DEFS[key];
+      const level = this.save.upgrades[key];
+      const cost = this.getUpgradeCost(key, level);
+      if (level >= def.max || this.save.totalCoins < cost) return;
+      this.save.totalCoins -= cost;
+      this.save.upgrades[key] += 1;
+      this.saveData();
+      playUpgradeSound();
+      this.renderUpgrade();
+      this.updateMenuStats();
+    }
+
+    generateDecorations() {
+      this.decorations = [];
+      this.generateMapDetails();
+      const count = Math.floor(clamp((this.width * this.height) / 17000, 36, 95));
+      const types = ["crack", "blood", "rocks", "grass", "crate", "barrel", "trash", "barricade", "tire", "cone"];
+      for (let i = 0; i < count; i++) {
+        const type = types[randInt(0, types.length - 1)];
+        this.decorations.push(new MapDecoration(type, rand(20, this.width - 20), rand(20, this.height - 20), rand(0.75, 1.25), rand(0, Math.PI * 2)));
+      }
+      const large = Math.floor(clamp(this.width / 260, 3, 7));
+      for (let i = 0; i < large; i++) {
+        this.decorations.push(new MapDecoration(Math.random() > 0.28 ? "car" : "police", rand(40, this.width - 40), rand(50, this.height - 50), rand(0.8, 1.2), rand(0, Math.PI * 2)));
+      }
+      const lamps = Math.floor(clamp(this.width / 420, 2, 5));
+      for (let i = 0; i < lamps; i++) {
+        this.decorations.push(new MapDecoration("lamp", rand(35, this.width - 35), rand(65, this.height - 35), rand(0.85, 1.05), rand(-0.1, 0.1)));
+      }
+    }
+
+    generateMapDetails() {
+      this.mapDetails = [];
+      const area = this.width * this.height;
+      const noiseCount = Math.floor(clamp(area / 5200, 110, 420));
+      for (let i = 0; i < noiseCount; i++) {
+        this.mapDetails.push({
+          kind: "noise",
+          x: rand(0, this.width),
+          y: rand(0, this.height),
+          w: randInt(1, 4),
+          h: randInt(1, 3),
+          c: Math.random() > 0.5 ? "#1a1d1c" : "#303432"
+        });
+      }
+      const patches = Math.floor(clamp(area / 55000, 14, 42));
+      for (let i = 0; i < patches; i++) {
+        this.mapDetails.push({
+          kind: Math.random() > 0.55 ? "patch" : "oil",
+          x: rand(0, this.width),
+          y: rand(0, this.height),
+          w: rand(22, 80),
+          h: rand(10, 34),
+          r: rand(0, Math.PI)
+        });
+      }
+      const cracks = Math.floor(clamp(area / 65000, 12, 36));
+      for (let i = 0; i < cracks; i++) {
+        this.mapDetails.push({
+          kind: "crack",
+          x: rand(20, this.width - 20),
+          y: rand(20, this.height - 20),
+          r: rand(0, Math.PI),
+          s: rand(0.7, 1.8)
+        });
+      }
+      const marks = Math.floor(clamp(area / 120000, 6, 20));
+      for (let i = 0; i < marks; i++) {
+        this.mapDetails.push({
+          kind: "tireMark",
+          x: rand(0, this.width),
+          y: rand(0, this.height),
+          len: rand(40, 130),
+          r: rand(0, Math.PI)
+        });
+      }
+    }
+
+    initFogParticles() {
+      const count = Math.floor(clamp((this.width * this.height) / 42000, 18, 46));
+      this.fogParticles = Array.from({ length: count }, () => ({
+        x: rand(0, this.width),
+        y: rand(0, this.height),
+        size: rand(70, 180),
+        speed: rand(4, 16),
+        alpha: rand(0.03, 0.08),
+        drift: rand(-0.25, 0.25)
+      }));
+    }
+
+    updateDifficulty(dt) {
+      this.difficultyLevel = Math.min(12, 1 + Math.floor(this.elapsed / 30));
+      if (this.difficultyLevel > this.lastDifficultyLevel) {
+        this.lastDifficultyLevel = this.difficultyLevel;
+        this.difficultyNoticeTimer = 2.2;
+        this.difficultyNoticeText = "难度提升\n尸群变得更强了";
+        this.shake = Math.max(this.shake, 4);
+      }
+      this.difficultyNoticeTimer = Math.max(0, this.difficultyNoticeTimer - dt);
+    }
+
+    getSpawnInterval() {
+      let ms = Math.max(450, 1800 - (this.difficultyLevel - 1) * 120);
+      if (this.isHordeActive()) ms *= 0.55;
+      return ms / 1000;
+    }
+
+    getSpawnCount() {
+      let count = 1;
+      if (this.difficultyLevel >= 3) count = randInt(1, 2);
+      if (this.difficultyLevel >= 6) count = randInt(2, 3);
+      if (this.difficultyLevel >= 9) count = randInt(3, 5);
+      if (this.isHordeActive()) count += 2;
+      return count;
+    }
+
+    getMaxZombies() {
+      let max = Math.min(120, 35 + this.difficultyLevel * 8);
+      if (this.isHordeActive()) max = Math.min(140, max + 20);
+      return max;
+    }
+
+    chooseZombieTypeByDifficulty() {
+      let table;
+      if (this.difficultyLevel <= 2) {
+        table = { normal: 80, fast: 15, tank: 5 };
+      } else if (this.difficultyLevel <= 5) {
+        table = { normal: 55, fast: 20, tank: 10, redEye: 8, armored: 4, exploder: 3 };
+      } else if (this.difficultyLevel <= 8) {
+        table = { normal: 35, fast: 20, tank: 12, redEye: 12, armored: 8, exploder: 7, poison: 6 };
+      } else {
+        table = { normal: 25, fast: 15, tank: 12, redEye: 15, armored: 12, exploder: 10, poison: 11 };
+      }
+      if (this.isHordeActive() && this.difficultyLevel >= 3) {
+        table = { ...table };
+        table.normal = Math.max(12, table.normal - 10);
+        table.redEye = (table.redEye || 0) + 4;
+        table.exploder = (table.exploder || 0) + 3;
+        table.armored = (table.armored || 0) + 2;
+        if (this.difficultyLevel >= 6) table.poison = (table.poison || 0) + 2;
+      }
+      const total = Object.values(table).reduce((sum, value) => sum + value, 0);
+      let roll = rand(0, total);
+      for (const [type, weight] of Object.entries(table)) {
+        roll -= weight;
+        if (roll <= 0) return type;
+      }
+      return "normal";
+    }
+
+    spawnZombie() {
+      const edge = randInt(0, 3);
+      let x = 0;
+      let y = 0;
+      const margin = 36;
+      if (edge === 0) { x = rand(0, this.width); y = -margin; }
+      if (edge === 1) { x = this.width + margin; y = rand(0, this.height); }
+      if (edge === 2) { x = rand(0, this.width); y = this.height + margin; }
+      if (edge === 3) { x = -margin; y = rand(0, this.height); }
+      this.zombies.push(new Zombie(this.chooseZombieTypeByDifficulty(), x, y, this.difficultyLevel));
+    }
+
+    startHordeEvent() {
+      this.hordeTimer = this.hordeDuration;
+      this.difficultyNoticeTimer = 2.8;
+      this.difficultyNoticeText = "尸潮来袭！";
+      this.shake = Math.max(this.shake, 10);
+      playHordeSound();
+    }
+
+    updateHordeEvent(dt) {
+      const currentSecond = Math.floor(this.elapsed);
+      if (currentSecond > 0 && currentSecond % 60 === 0 && this.lastHordeTriggerTime !== currentSecond) {
+        this.lastHordeTriggerTime = currentSecond;
+        this.startHordeEvent();
+      }
+      this.hordeTimer = Math.max(0, this.hordeTimer - dt);
+    }
+
+    isHordeActive() {
+      return this.hordeTimer > 0;
+    }
+
+    getAimAssistTarget() {
+      if (!this.player || !this.zombies.length) return null;
+      let best = null;
+      let bestDistance = Infinity;
+      for (const zombie of this.zombies) {
+        if (!zombie.alive) continue;
+        const d = dist(this.player.x, this.player.y, zombie.x, zombie.y);
+        if (d < bestDistance && d < 560) {
+          best = zombie;
+          bestDistance = d;
+        }
+      }
+      return best;
+    }
+
+    updatePoisonPools(dt) {
+      this.poisonPools.forEach((pool) => pool.update(dt, this));
+      this.poisonPools = this.poisonPools.filter((pool) => pool.alive);
+    }
+
+    updateFog(dt) {
+      for (const fog of this.fogParticles) {
+        fog.x += fog.speed * dt;
+        fog.y += fog.drift * fog.speed * dt;
+        if (fog.x - fog.size > this.width) {
+          fog.x = -fog.size;
+          fog.y = rand(0, this.height);
+        }
+      }
+    }
+
+    update(dt) {
+      if (this.state !== "playing") return;
+      this.elapsed += dt;
+      this.updateDifficulty(dt);
+      this.updateHordeEvent(dt);
+      this.player.update(dt, this);
+      const maxZombies = this.getMaxZombies();
+      this.spawnTimer -= dt;
+      if (this.spawnTimer <= 0 && this.zombies.length < maxZombies) {
+        const spawnCount = this.getSpawnCount();
+        for (let i = 0; i < spawnCount && this.zombies.length < maxZombies; i++) this.spawnZombie();
+        this.spawnTimer = this.getSpawnInterval() * rand(0.75, 1.15);
+      }
+
+      this.zombies.forEach((zombie) => zombie.update(dt, this));
+      this.bullets.forEach((bullet) => bullet.update(dt, this));
+      this.coins.forEach((coin) => coin.update(dt, this));
+      this.updatePoisonPools(dt);
+      this.updateFog(dt);
+      this.particles = this.particles.filter((particle) => particle.update(dt));
+      this.bullets = this.bullets.filter((bullet) => bullet.alive);
+      this.zombies = this.zombies.filter((zombie) => zombie.alive);
+      this.coins = this.coins.filter((coin) => !coin.collected);
+      this.shake = Math.max(0, this.shake - dt * 18);
+      this.damageFlash = Math.max(0, this.damageFlash - dt);
+      this.input.clearFrame();
+    }
+
+    loop(time) {
+      const dt = Math.min(0.033, (time - this.lastTime) / 1000 || 0);
+      this.lastTime = time;
+      this.update(dt);
+      this.draw();
+      requestAnimationFrame((next) => this.loop(next));
+    }
+
+    draw() {
+      const shakeX = this.state === "playing" ? rand(-this.shake, this.shake) : 0;
+      const shakeY = this.state === "playing" ? rand(-this.shake, this.shake) : 0;
+      ctx.save();
+      ctx.clearRect(0, 0, this.width, this.height);
+      ctx.translate(Math.round(shakeX), Math.round(shakeY));
+      this.drawMap(ctx);
+      this.decorations.forEach((decoration) => decoration.draw(ctx));
+
+      if (this.state === "playing" || this.state === "paused" || this.state === "gameover") {
+        this.drawPoisonPools(ctx);
+        this.coins.forEach((coin) => coin.draw(ctx));
+        this.bullets.forEach((bullet) => bullet.draw(ctx));
+        this.zombies.forEach((zombie) => zombie.draw(ctx, this.elapsed, this.getZombieRenderAlpha(zombie)));
+        if (this.player) this.player.draw(ctx);
+        this.particles.forEach((particle) => particle.draw(ctx));
+      } else {
+        this.drawMenuAtmosphere(ctx);
+      }
+      ctx.restore();
+
+      if (this.state === "playing" || this.state === "paused") {
+        this.drawFogOverlay(ctx);
+        this.drawDarknessOverlay(ctx);
+        if (this.isHordeActive()) this.drawRedAlertOverlay(ctx);
+        this.drawDifficultyNotice(ctx);
+      }
+      if (this.state === "playing" || this.state === "paused") this.drawHUD(ctx);
+      if (this.state === "paused") this.drawPause(ctx);
+      this.drawVignette(ctx);
+      if (this.damageFlash > 0) this.drawDamageFlash(ctx);
+      this.drawCrosshair(ctx);
+    }
+
+    drawMap(context) {
+      context.fillStyle = "#202423";
+      context.fillRect(0, 0, this.width, this.height);
+      for (let y = 0; y < this.height; y += 220) {
+        pixelRect(context, 0, y + 16, this.width, 2, "rgba(110,112,103,0.08)");
+        for (let x = 24; x < this.width; x += 132) {
+          const chip = (x + y) % 4 === 0 ? 10 : 0;
+          pixelRect(context, x, y + 13, 38 - chip, 6, "rgba(120,120,108,0.33)");
+          pixelRect(context, x + 10, y + 13, 7, 6, "rgba(32,36,34,0.58)");
+        }
+      }
+      for (let x = 0; x < this.width; x += 360) {
+        pixelRect(context, x + 70, 0, 2, this.height, "rgba(100,98,86,0.07)");
+        for (let y = 36; y < this.height; y += 145) {
+          pixelRect(context, x + 65, y, 7, 34, "rgba(113,106,78,0.28)");
+          pixelRect(context, x + 65, y + 9, 7, 8, "rgba(31,34,32,0.52)");
+        }
+      }
+
+      for (const item of this.mapDetails) {
+        if (item.kind === "noise") {
+          pixelRect(context, item.x, item.y, item.w, item.h, item.c);
+        } else if (item.kind === "patch" || item.kind === "oil") {
+          context.save();
+          context.translate(item.x, item.y);
+          context.rotate(item.r);
+          context.fillStyle = item.kind === "oil" ? "rgba(9,10,9,0.36)" : "rgba(57,50,43,0.25)";
+          context.fillRect(-item.w / 2, -item.h / 2, item.w, item.h);
+          pixelRect(context, -item.w / 2 + 5, -item.h / 2 + 3, item.w * 0.25, 3, item.kind === "oil" ? "rgba(70,75,67,0.22)" : "rgba(91,75,58,0.25)");
+          context.restore();
+        } else if (item.kind === "crack") {
+          context.save();
+          context.translate(item.x, item.y);
+          context.rotate(item.r);
+          context.scale(item.s, item.s);
+          context.strokeStyle = "#080a0a";
+          context.lineWidth = 2;
+          context.beginPath();
+          context.moveTo(-20, -2);
+          context.lineTo(-7, 0);
+          context.lineTo(0, -9);
+          context.lineTo(9, 2);
+          context.lineTo(24, 5);
+          context.moveTo(0, -9);
+          context.lineTo(-4, -22);
+          context.moveTo(8, 2);
+          context.lineTo(6, 15);
+          context.stroke();
+          context.restore();
+        } else if (item.kind === "tireMark") {
+          context.save();
+          context.translate(item.x, item.y);
+          context.rotate(item.r);
+          pixelRect(context, -item.len / 2, -6, item.len, 3, "rgba(5,6,6,0.28)");
+          pixelRect(context, -item.len / 2 + 10, 5, item.len - 20, 3, "rgba(5,6,6,0.23)");
+          context.restore();
+        }
+      }
+    }
+
+    drawMenuAtmosphere(context) {
+      context.save();
+      context.globalAlpha = 0.45;
+      for (let i = 0; i < 16; i++) {
+        const x = (i * 147 + Math.sin(performance.now() * 0.0002 + i) * 20) % this.width;
+        const y = (i * 89) % this.height;
+        const type = i % 5 === 0 ? "fat" : i % 3 === 0 ? "fast" : "normal";
+        new Zombie(type, x, y).draw(context, performance.now() * 0.001);
+      }
+      context.restore();
+    }
+
+    getVisionRadius() {
+      return Math.max(220, 420 - this.difficultyLevel * 18);
+    }
+
+    getZombieRenderAlpha(zombie) {
+      if (!this.player) return 1;
+      const d = dist(zombie.x, zombie.y, this.player.x, this.player.y);
+      const near = 250;
+      const far = Math.max(500, this.getVisionRadius() + 160);
+      if (d <= near) return 1;
+      if (d >= far) return 0.35;
+      return clamp(1 - (d - near) / (far - near) * 0.65, 0.35, 1);
+    }
+
+    drawPoisonPools(context) {
+      this.poisonPools.forEach((pool) => pool.draw(context));
+    }
+
+    drawFogOverlay(context) {
+      if (!this.player) return;
+      const fogAlpha = Math.min(0.35, 0.05 + this.difficultyLevel * 0.025);
+      const redTint = this.isHordeActive();
+      context.save();
+      for (const fog of this.fogParticles) {
+        context.globalAlpha = fog.alpha + fogAlpha * 0.18;
+        context.fillStyle = redTint ? "rgba(116, 35, 32, 0.55)" : "rgba(95, 111, 100, 0.42)";
+        context.fillRect(Math.round(fog.x), Math.round(fog.y), Math.round(fog.size), Math.round(fog.size * 0.34));
+        context.fillRect(Math.round(fog.x + fog.size * 0.25), Math.round(fog.y - fog.size * 0.12), Math.round(fog.size * 0.58), Math.round(fog.size * 0.22));
+      }
+      context.restore();
+    }
+
+    drawVisionMask(context) {
+      if (!this.player) return;
+      const radius = this.getVisionRadius();
+      const darknessAlpha = Math.min(0.55, 0.12 + this.difficultyLevel * 0.035);
+      const gradient = context.createRadialGradient(this.player.x, this.player.y, radius * 0.35, this.player.x, this.player.y, radius);
+      gradient.addColorStop(0, "rgba(0,0,0,0)");
+      gradient.addColorStop(0.58, `rgba(0,0,0,${darknessAlpha * 0.22})`);
+      gradient.addColorStop(1, `rgba(0,0,0,${darknessAlpha})`);
+      context.fillStyle = gradient;
+      context.fillRect(0, 0, this.width, this.height);
+    }
+
+    drawDarknessOverlay(context) {
+      context.save();
+      this.drawVisionMask(context);
+      context.restore();
+    }
+
+    drawDifficultyNotice(context) {
+      if (this.difficultyNoticeTimer <= 0) return;
+      if (this.difficultyNoticeText === "尸潮来袭！") {
+        this.drawHordeWarning(context);
+        return;
+      }
+      const alpha = clamp(this.difficultyNoticeTimer / 2.2, 0, 1);
+      const jitter = this.difficultyNoticeTimer > 1.5 ? rand(-2, 2) : 0;
+      context.save();
+      context.globalAlpha = alpha;
+      this.text(context, "难度提升", this.width / 2 + jitter, this.height / 2 - 42 + jitter, 36, "#ff3a2e", "center");
+      this.text(context, "尸群变得更强了", this.width / 2 - jitter, this.height / 2 + 2, 20, "#f3c65b", "center");
+      context.restore();
+    }
+
+    drawHordeWarning(context) {
+      const alpha = clamp(this.difficultyNoticeTimer / 2.8, 0, 1);
+      const jitter = rand(-3, 3);
+      context.save();
+      context.globalAlpha = alpha;
+      this.text(context, "尸潮来袭！", this.width / 2 + jitter, this.height / 2 - 30 + jitter, 50, "#ff2e24", "center");
+      this.text(context, "RUN OR DIE", this.width / 2 - jitter, this.height / 2 + 22, 18, "#f3c65b", "center");
+      context.restore();
+    }
+
+    drawRedAlertOverlay(context) {
+      const pulse = 0.35 + Math.sin(this.elapsed * 10) * 0.16;
+      context.save();
+      context.strokeStyle = `rgba(210, 24, 18, ${pulse})`;
+      context.lineWidth = 30;
+      context.strokeRect(10, 10, this.width - 20, this.height - 20);
+      context.fillStyle = `rgba(120, 0, 0, ${0.08 + pulse * 0.08})`;
+      context.fillRect(0, 0, this.width, this.height);
+      context.restore();
+    }
+
+    drawHUD(context) {
+      if (!this.player) return;
+      this.drawPanel(context, 18, 18, 252, 62);
+      drawPixelOutlineRect(context, 33, 40, 166, 18, "#130909", "#050505", "#513131", "#050202");
+      pixelRect(context, 35, 42, 162 * clamp(this.player.hp / this.player.maxHp, 0, 1), 14, "#a91f19");
+      pixelRect(context, 35, 42, 162 * clamp(this.player.hp / this.player.maxHp, 0, 1), 4, "#ff4a35");
+      pixelRect(context, 26, 29, 9, 9, "#d8392d");
+      pixelRect(context, 22, 33, 17, 12, "#b6261f");
+      pixelRect(context, 26, 43, 9, 7, "#7c1412");
+      this.text(context, "HP", 48, 31, 18, "#f2f0df", "left");
+      this.text(context, `${Math.ceil(this.player.hp)} / ${this.player.maxHp}`, 222, 50, 16, "#fff5df", "center");
+
+      this.drawPanel(context, this.width / 2 - 88, 18, 176, 44);
+      this.text(context, "生存时间", this.width / 2, 34, 16, "#f3f1df", "center");
+      this.text(context, formatTime(this.elapsed), this.width / 2, 55, 18, "#ffffff", "center");
+      this.drawDifficultyUI(context);
+
+      this.drawPanel(context, this.width - 188, 18, 170, 70);
+      drawCoinIcon(context, this.width - 170, 31);
+      drawSkullIcon(context, this.width - 168, 58);
+      this.text(context, `${this.runCoins}`, this.width - 105, 42, 20, "#ffd35a", "center");
+      this.text(context, `${this.kills}`, this.width - 105, 70, 20, "#f5f2e2", "center");
+
+      this.drawPanel(context, this.width - 176, this.height - 96, 158, 76);
+      drawMiniGunIcon(context, this.width - 157, this.height - 78);
+      this.text(context, "手枪", this.width - 77, this.height - 71, 14, "#c8cdc7", "center");
+      this.text(context, `${this.player.ammo} / ${this.player.magSize}`, this.width - 78, this.height - 43, 20, "#ffffff", "center");
+      if (this.player.reloading) this.text(context, "换弹中...", this.width - 78, this.height - 24, 14, "#f3c65b", "center");
+
+      this.drawPanel(context, 18, this.height - 92, 92, 72);
+      const ready = this.player.dashCooldown <= 0;
+      drawPixelOutlineRect(context, 37, this.height - 70, 40, 32, ready ? "#4c692c" : "#303432", "#050505", ready ? "#87a94d" : "#565d5a", "#151817");
+      pixelRect(context, 48, this.height - 64, 17, 5, "#d1c08b");
+      pixelRect(context, 44, this.height - 57, 25, 5, "#877044");
+      pixelRect(context, 50, this.height - 50, 11, 5, "#d1c08b");
+      this.text(context, "DASH", 57, this.height - 45, 11, "#f1edce", "center");
+      this.text(context, ready ? "空格" : `${this.player.dashCooldown.toFixed(1)}s`, 64, this.height - 24, 13, ready ? "#f3c65b" : "#b7bbb3", "center");
+    }
+
+    drawDifficultyUI(context) {
+      const x = this.width / 2 - 72;
+      const y = 68;
+      this.drawPanel(context, x, y, 144, this.isHordeActive() ? 54 : 34);
+      this.text(context, `难度：Lv.${this.difficultyLevel}`, this.width / 2, y + 18, 16, "#ffb3a9", "center");
+      if (this.isHordeActive()) this.text(context, `尸潮 ${this.hordeTimer.toFixed(1)}s`, this.width / 2, y + 40, 14, "#ff3a2e", "center");
+    }
+
+    drawPanel(context, x, y, w, h) {
+      pixelRect(context, x + 5, y + 6, w, h, "rgba(0,0,0,0.42)");
+      pixelRect(context, x - 3, y - 3, w + 6, h + 6, "#050606");
+      pixelRect(context, x, y, w, h, "rgba(9,12,12,0.82)");
+      pixelRect(context, x + 2, y + 2, w - 4, 3, "rgba(255,255,255,0.16)");
+      pixelRect(context, x + 2, y + h - 6, w - 4, 4, "rgba(0,0,0,0.55)");
+      context.strokeStyle = "#464f4b";
+      context.lineWidth = 2;
+      context.strokeRect(Math.round(x) + 2, Math.round(y) + 2, Math.round(w) - 4, Math.round(h) - 4);
+      context.strokeStyle = "#161b1a";
+      context.strokeRect(Math.round(x) + 5, Math.round(y) + 5, Math.round(w) - 10, Math.round(h) - 10);
+    }
+
+    text(context, text, x, y, size = 16, color = "#fff", align = "left") {
+      context.save();
+      context.font = `700 ${size}px "Courier New", monospace`;
+      context.textAlign = align;
+      context.textBaseline = "middle";
+      context.fillStyle = "#050505";
+      context.fillText(text, Math.round(x + 2), Math.round(y + 2));
+      context.fillStyle = color;
+      context.fillText(text, Math.round(x), Math.round(y));
+      context.restore();
+    }
+
+    drawPause(context) {
+      context.save();
+      context.fillStyle = "rgba(0,0,0,0.58)";
+      context.fillRect(0, 0, this.width, this.height);
+      this.text(context, "PAUSED", this.width / 2, this.height / 2 - 24, 58, "#f3c65b", "center");
+      this.text(context, "按 ESC 继续", this.width / 2, this.height / 2 + 32, 20, "#f2f0df", "center");
+      context.restore();
+    }
+
+    drawDamageFlash(context) {
+      const a = clamp(this.damageFlash / 0.34, 0, 1);
+      context.save();
+      context.strokeStyle = `rgba(210, 24, 18, ${a})`;
+      context.lineWidth = 22;
+      context.strokeRect(10, 10, this.width - 20, this.height - 20);
+      context.fillStyle = `rgba(120, 0, 0, ${a * 0.12})`;
+      context.fillRect(0, 0, this.width, this.height);
+      context.restore();
+    }
+
+    drawVignette(context) {
+      context.save();
+      const gradient = context.createRadialGradient(this.width / 2, this.height / 2, Math.min(this.width, this.height) * 0.22, this.width / 2, this.height / 2, Math.max(this.width, this.height) * 0.68);
+      gradient.addColorStop(0, "rgba(0,0,0,0)");
+      gradient.addColorStop(0.72, "rgba(0,0,0,0.18)");
+      gradient.addColorStop(1, "rgba(0,0,0,0.58)");
+      context.fillStyle = gradient;
+      context.fillRect(0, 0, this.width, this.height);
+      pixelRect(context, 0, 0, this.width, 18, "rgba(0,0,0,0.22)");
+      pixelRect(context, 0, this.height - 22, this.width, 22, "rgba(0,0,0,0.28)");
+      context.restore();
+    }
+
+    drawCrosshair(context) {
+      const x = Math.round(this.mouse.x);
+      const y = Math.round(this.mouse.y);
+      context.save();
+      context.strokeStyle = "#f3f1df";
+      context.lineWidth = 2;
+      context.beginPath();
+      context.moveTo(x - 16, y);
+      context.lineTo(x - 6, y);
+      context.moveTo(x + 6, y);
+      context.lineTo(x + 16, y);
+      context.moveTo(x, y - 16);
+      context.lineTo(x, y - 6);
+      context.moveTo(x, y + 6);
+      context.lineTo(x, y + 16);
+      context.stroke();
+      pixelRect(context, x - 2, y - 2, 4, 4, "#d73528");
+      context.restore();
+    }
+  }
+
+  window.addEventListener("DOMContentLoaded", () => {
+    window.pixelZombieSurvival = new Game();
+  });
+})();

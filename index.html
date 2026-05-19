@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PIXEL ZOMBIE SURVIVAL</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <canvas id="gameCanvas" aria-label="PIXEL ZOMBIE SURVIVAL game canvas"></canvas>
+
+  <div id="uiRoot">
+    <section id="menuScreen" class="screen active">
+      <div class="city-silhouette"></div>
+      <div class="menu-panel">
+        <h1 class="game-title">
+          <span>PIXEL</span>
+          <span>ZOMBIE</span>
+          <span>SURVIVAL</span>
+        </h1>
+        <p class="subtitle">像素尸潮生存挑战</p>
+        <button id="startBtn" class="pixel-btn primary">开始游戏</button>
+        <button id="upgradeBtn" class="pixel-btn">升级</button>
+        <button id="recordsBtn" class="pixel-btn">最高纪录</button>
+        <div id="recordBox" class="record-box">
+          <p>最高击杀：<strong id="menuBestKills">0</strong></p>
+          <p>最长生存：<strong id="menuBestTime">00:00</strong></p>
+          <p>总金币：<strong id="menuTotalCoins">0</strong></p>
+        </div>
+        <div class="controls">
+          <p>WASD 移动 · 鼠标瞄准 · 左键射击</p>
+          <p>R 换弹 · 空格冲刺 · ESC 暂停</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="upgradeScreen" class="screen">
+      <div class="panel wide">
+        <header class="panel-header">
+          <h2>升级</h2>
+          <div class="coin-total">金币 <strong id="upgradeCoins">0</strong></div>
+        </header>
+        <div id="upgradeList" class="upgrade-list"></div>
+        <button id="backFromUpgradeBtn" class="pixel-btn">返回首页</button>
+      </div>
+    </section>
+
+    <section id="gameOverScreen" class="screen">
+      <div class="panel gameover-panel">
+        <h2 class="gameover-title">GAME OVER</h2>
+        <div class="stats-grid">
+          <span>本局生存</span><strong id="finalTime">00:00</strong>
+          <span>本局击杀</span><strong id="finalKills">0</strong>
+          <span>获得金币</span><strong id="finalCoins">0</strong>
+          <span>最高击杀</span><strong id="finalBestKills">0</strong>
+          <span>最长生存</span><strong id="finalBestTime">00:00</strong>
+        </div>
+        <div class="button-row">
+          <button id="restartBtn" class="pixel-btn primary">重新开始</button>
+          <button id="gameOverUpgradeBtn" class="pixel-btn">进入升级</button>
+          <button id="homeBtn" class="pixel-btn">返回首页</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div id="touchControls" class="touch-controls" aria-hidden="true">
+    <div id="moveStick" class="touch-stick" aria-label="移动">
+      <div class="touch-stick-base">
+        <div id="moveKnob" class="touch-stick-knob"></div>
+      </div>
+    </div>
+    <button id="dashTouchBtn" class="touch-action touch-dash" type="button">冲刺</button>
+    <button id="reloadTouchBtn" class="touch-action touch-reload" type="button">换弹</button>
+    <button id="fireTouchBtn" class="touch-action touch-fire" type="button">射击</button>
+  </div>
+
+  <script src="main.js"></script>
+</body>
+</html>

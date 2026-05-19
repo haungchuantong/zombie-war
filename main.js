@@ -53,13 +53,13 @@
   };
 
   const UPGRADE_DEFS = {
-    damage: { name: "武器伤害", icon: "DMG", baseCost: 100, max: 10, effect: "每级 +5 伤害" },
-    fireRate: { name: "射击速度", icon: "ROF", baseCost: 120, max: 10, effect: "每级缩短射击间隔" },
-    maxHp: { name: "最大生命值", icon: "HP", baseCost: 90, max: 10, effect: "每级 +20 HP" },
-    speed: { name: "移动速度", icon: "SPD", baseCost: 100, max: 10, effect: "每级 +0.15 速度" },
+    damage: { name: "武器伤害", icon: "伤", baseCost: 100, max: 10, effect: "每级 +5 伤害" },
+    fireRate: { name: "射击速度", icon: "速", baseCost: 120, max: 10, effect: "每级缩短射击间隔" },
+    maxHp: { name: "最大生命值", icon: "命", baseCost: 90, max: 10, effect: "每级 +20 生命" },
+    speed: { name: "移动速度", icon: "移", baseCost: 100, max: 10, effect: "每级 +0.15 速度" },
     magazine: {
       name: "弹夹容量",
-      icon: "MAG",
+      icon: "弹",
       max: 10,
       baseValue: 12,
       perLevel: 3,
@@ -3816,8 +3816,8 @@
       const x = this.width / 2 - 72;
       const y = 68;
       this.drawPanel(context, x, y, 144, this.isHordeActive() ? 54 : 34);
-      this.text(context, `难度：Lv.${this.difficultyLevel}`, this.width / 2, y + 18, 16, "#ffb3a9", "center");
-      if (this.isHordeActive()) this.text(context, `尸潮 ${this.hordeTimer.toFixed(1)}s`, this.width / 2, y + 40, 14, "#ff3a2e", "center");
+      this.text(context, `难度：${this.difficultyLevel}`, this.width / 2, y + 18, 16, "#ffb3a9", "center");
+      if (this.isHordeActive()) this.text(context, `尸潮 ${this.hordeTimer.toFixed(1)}秒`, this.width / 2, y + 40, 14, "#ff3a2e", "center");
       return;
       this.text(context, `难度：Lv.${this.difficultyLevel}`, this.width / 2, y + 18, 16, "#ffb3a9", "center");
       if (this.isHordeActive()) this.text(context, `尸潮 ${this.hordeTimer.toFixed(1)}s`, this.width / 2, y + 40, 14, "#ff3a2e", "center");

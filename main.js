@@ -5,6 +5,46 @@
   const ctx = canvas.getContext("2d");
   ctx.imageSmoothingEnabled = false;
 
+  const SPRITE_FRAME_SIZE = 96;
+  const SPRITE_COLS = 6;
+  const SPRITE_ROWS = {
+    idle: 0,
+    move: 1,
+    attack: 2,
+    hit: 3,
+    special: 4
+  };
+  const CHARACTER_SPRITES = {
+    survivor: "assets/images/characters/survivor-sheet.png",
+    normal: "assets/images/characters/zombie-normal-sheet.png",
+    fast: "assets/images/characters/zombie-fast-sheet.png",
+    tank: "assets/images/characters/zombie-tank-sheet.png",
+    redEye: "assets/images/characters/zombie-redeye-sheet.png",
+    armored: "assets/images/characters/zombie-armored-sheet.png",
+    exploder: "assets/images/characters/zombie-exploder-sheet.png",
+    poison: "assets/images/characters/zombie-poison-sheet.png"
+  };
+
+  class SpriteAssets {
+    constructor(sources) {
+      this.images = {};
+      Object.entries(sources).forEach(([key, src]) => {
+        const image = new Image();
+        image.decoding = "async";
+        image.src = src;
+        this.images[key] = image;
+      });
+    }
+
+    get(key) {
+      const image = this.images[key];
+      if (!image || !image.complete || !image.naturalWidth) return null;
+      return image;
+    }
+  }
+
+  const spriteAssets = new SpriteAssets(CHARACTER_SPRITES);
+
   const STORAGE_KEYS = {
     coins: "pzs_totalCoins",
     bestKills: "pzs_bestKills",
@@ -274,6 +314,39 @@
   function drawSpriteFeetShadow(context, x, y, w, h, alpha = 0.42) {
     drawPixelShadow(context, x, y, w, h, alpha);
     pixelRect(context, x - w * 0.24, y - 1, w * 0.48, 2, "rgba(0,0,0,0.18)");
+  }
+
+  function drawCharacterSprite(context, image, options) {
+    const row = clamp(options.row ?? 0, 0, 4);
+    const frame = Math.floor(options.frame ?? 0) % SPRITE_COLS;
+    const scale = options.scale ?? 1;
+    const alpha = options.alpha ?? 1;
+    const angle = options.angle ?? 0;
+    const bob = options.bob ?? 0;
+    const sx = frame * SPRITE_FRAME_SIZE;
+    const sy = row * SPRITE_FRAME_SIZE;
+    context.save();
+    context.globalAlpha *= alpha;
+    context.translate(Math.round(options.x), Math.round(options.y + bob));
+    context.rotate(angle);
+    context.imageSmoothingEnabled = false;
+    context.drawImage(
+      image,
+      sx,
+      sy,
+      SPRITE_FRAME_SIZE,
+      SPRITE_FRAME_SIZE,
+      -SPRITE_FRAME_SIZE * 0.5 * scale,
+      -SPRITE_FRAME_SIZE * 0.56 * scale,
+      SPRITE_FRAME_SIZE * scale,
+      SPRITE_FRAME_SIZE * scale
+    );
+    context.restore();
+  }
+
+  function drawSpriteHealthBar(context, x, y, w, value, fill) {
+    drawPixelOutlineRect(context, x - w / 2 - 1, y - 1, w + 2, 6, "#111", "#050505");
+    pixelRect(context, x - w / 2, y + 1, w * clamp(value, 0, 1), 2, fill);
   }
 
   class AudioBus {
@@ -651,6 +724,7 @@
       if (this.exploded) return;
       this.exploded = true;
       this.alive = false;
+      game.deathSprites.push(new DeathSprite(this.x, this.y, this.type, this.angle, SPRITE_ROWS.special));
       game.shake = Math.max(game.shake, 14);
       if (dist(this.x, this.y, game.player.x, game.player.y) < this.explodeRadius + game.player.radius) {
         game.player.takeDamage(35, game);
@@ -705,6 +779,7 @@
       }
       this.alive = false;
       game.kills += 1;
+      game.deathSprites.push(new DeathSprite(this.x, this.y, this.type, this.angle, this.type === "poison" ? SPRITE_ROWS.special : SPRITE_ROWS.hit));
       game.coins.push(new Coin(this.x + rand(-8, 8), this.y + rand(-8, 8), this.reward));
       if (this.type === "poison") game.poisonPools.push(new PoisonPool(this.x, this.y));
       const count = this.type === "tank" || this.type === "armored" ? 34 : 20;
@@ -725,6 +800,56 @@
     }
 
     draw(context, elapsed, renderAlpha = 1) {
+      const sprite = spriteAssets.get(this.type);
+      if (sprite) {
+        context.save();
+        context.globalAlpha *= renderAlpha;
+        if (this.type === "exploder" && this.exploding) {
+          context.globalAlpha *= 0.82 + Math.sin(elapsed * 28) * 0.18;
+          context.strokeStyle = "rgba(255, 70, 22, 0.65)";
+          context.lineWidth = 3;
+          context.beginPath();
+          context.ellipse(this.x, this.y, this.explodeRadius, this.explodeRadius * 0.58, 0, 0, Math.PI * 2);
+          context.stroke();
+        }
+        const bulky = this.type === "tank" || this.type === "armored";
+        const slim = this.type === "fast" || this.type === "redEye";
+        const row = this.hitFlash > 0
+          ? SPRITE_ROWS.hit
+          : this.exploding || this.type === "poison" && Math.sin(elapsed * 7 + this.walk) > 0.78
+            ? SPRITE_ROWS.special
+            : this.attackTimer > 0.42
+              ? SPRITE_ROWS.attack
+              : SPRITE_ROWS.move;
+        const frameRate = this.type === "redEye" || this.type === "fast" ? 11 : bulky ? 6 : 8;
+        const frame = Math.floor((elapsed * frameRate + this.walk) % SPRITE_COLS);
+        const scale = bulky ? 0.96 : slim ? 0.64 : this.type === "exploder" ? 0.8 : 0.72;
+        if (this.type === "redEye") {
+          drawCharacterSprite(context, sprite, {
+            row: SPRITE_ROWS.move,
+            frame,
+            x: this.x - Math.cos(this.angle) * 14,
+            y: this.y - Math.sin(this.angle) * 14,
+            angle: this.angle,
+            scale,
+            alpha: 0.22
+          });
+        }
+        drawCharacterSprite(context, sprite, {
+          row,
+          frame,
+          x: this.x,
+          y: this.y,
+          angle: this.angle,
+          scale,
+          bob: Math.sin(elapsed * (slim ? 18 : 9) + this.walk) * (slim ? 1.2 : 0.8)
+        });
+        const w = this.radius * 2;
+        const y = this.y - this.radius - 14;
+        drawSpriteHealthBar(context, this.x, y, w, this.hp / this.maxHp, this.type === "armored" ? "#c8c8b8" : "#df3028");
+        context.restore();
+        return;
+      }
       const scale = this.type === "tank" || this.type === "armored" ? 1.32 : this.type === "fast" || this.type === "redEye" ? 0.86 : 1;
       const step = Math.sin(elapsed * (this.type === "redEye" ? 18 : this.type === "fast" ? 16 : 9) + this.walk);
       const skinPalettes = {
@@ -838,6 +963,42 @@
     }
   }
 
+  class DeathSprite {
+    constructor(x, y, type, angle, row) {
+      this.x = x;
+      this.y = y;
+      this.type = type;
+      this.angle = angle;
+      this.row = row;
+      this.life = 0.55;
+      this.maxLife = this.life;
+      this.frameOffset = randInt(2, 5);
+    }
+
+    update(dt) {
+      this.life -= dt;
+      return this.life > 0;
+    }
+
+    draw(context) {
+      const image = spriteAssets.get(this.type);
+      if (!image) return;
+      const progress = 1 - this.life / this.maxLife;
+      const bulky = this.type === "tank" || this.type === "armored";
+      const slim = this.type === "fast" || this.type === "redEye";
+      const scale = bulky ? 0.96 : slim ? 0.64 : this.type === "exploder" ? 0.8 : 0.72;
+      drawCharacterSprite(context, image, {
+        row: this.row,
+        frame: Math.min(5, this.frameOffset + Math.floor(progress * 3)),
+        x: this.x,
+        y: this.y + progress * 5,
+        angle: this.angle + progress * 0.2,
+        scale,
+        alpha: clamp(this.life / this.maxLife, 0, 1)
+      });
+    }
+  }
+
   class Player {
     constructor(game) {
       this.x = game.width / 2;
@@ -852,6 +1013,7 @@
       this.reloading = false;
       this.reloadTimer = 0;
       this.fireTimer = 0;
+      this.dashVisualTimer = 0;
       this.applyUpgrades(game.save.upgrades);
       this.hp = this.maxHp;
       this.ammo = this.magSize;
@@ -873,6 +1035,7 @@
       this.aimAngle = angleTo(this.x, this.y, game.mouse.x, game.mouse.y);
       this.fireTimer = Math.max(0, this.fireTimer - dt);
       this.dashCooldown = Math.max(0, this.dashCooldown - dt);
+      this.dashVisualTimer = Math.max(0, this.dashVisualTimer - dt);
       this.hurtFlash = Math.max(0, this.hurtFlash - dt);
 
       let mx = 0;
@@ -946,6 +1109,7 @@
       this.x = clamp(this.x + dx * 112, this.radius, game.width - this.radius);
       this.y = clamp(this.y + dy * 112, this.radius, game.height - this.radius);
       this.dashCooldown = this.maxDashCooldown;
+      this.dashVisualTimer = 0.2;
       game.shake = Math.max(game.shake, 5);
     }
 
@@ -995,6 +1159,47 @@
     }
 
     draw(context) {
+      const sprite = spriteAssets.get("survivor");
+      if (sprite) {
+        const moving = this.walk > 0 && Math.abs(Math.sin(this.walk)) > 0.08;
+        const recentlyShot = this.fireTimer > Math.max(0.03, this.fireInterval * 0.45);
+        const row = this.hurtFlash > 0
+          ? SPRITE_ROWS.hit
+          : this.dashVisualTimer > 0 || this.reloading
+            ? SPRITE_ROWS.special
+            : recentlyShot
+              ? SPRITE_ROWS.attack
+              : moving
+                ? SPRITE_ROWS.move
+                : SPRITE_ROWS.idle;
+        const frameSpeed = row === SPRITE_ROWS.move ? 0.42 : row === SPRITE_ROWS.attack ? 0.7 : 0.34;
+        const frame = Math.floor(this.walk * frameSpeed + performance.now() * 0.006) % SPRITE_COLS;
+        const bodyAngle = this.aimAngle * 0.82 + this.moveAngle * 0.18;
+        if (this.dashVisualTimer > 0) {
+          for (let i = 1; i <= 3; i++) {
+            drawCharacterSprite(context, sprite, {
+              row,
+              frame: Math.max(0, frame - i),
+              x: this.x - Math.cos(this.aimAngle) * i * 13,
+              y: this.y - Math.sin(this.aimAngle) * i * 13,
+              angle: bodyAngle,
+              scale: 0.78,
+              alpha: 0.18 / i
+            });
+          }
+        }
+        drawCharacterSprite(context, sprite, {
+          row,
+          frame,
+          x: this.x,
+          y: this.y,
+          angle: bodyAngle,
+          scale: 0.78,
+          bob: row === SPRITE_ROWS.idle ? Math.sin(performance.now() * 0.004) * 1.2 : 0
+        });
+        drawSpriteHealthBar(context, this.x, this.y + 25, 36, this.hp / this.maxHp, "#54e247");
+        return;
+      }
       const step = Math.sin(this.walk) * 2;
       const bodyAngle = this.aimAngle * 0.7 + this.moveAngle * 0.3;
       drawSpriteFeetShadow(context, this.x + 2, this.y + 24, 44, 15, 0.44);
@@ -1267,6 +1472,7 @@
       this.mapDetails = [];
       this.bullets = [];
       this.zombies = [];
+      this.deathSprites = [];
       this.particles = [];
       this.coins = [];
       this.poisonPools = [];
@@ -1532,6 +1738,7 @@
       this.lastHordeTriggerTime = 0;
       this.bullets = [];
       this.zombies = [];
+      this.deathSprites = [];
       this.particles = [];
       this.coins = [];
       this.poisonPools = [];
@@ -1874,6 +2081,7 @@
       }
 
       this.zombies.forEach((zombie) => zombie.update(dt, this));
+      this.deathSprites.forEach((sprite) => sprite.update(dt));
       this.bullets.forEach((bullet) => bullet.update(dt, this));
       this.coins.forEach((coin) => coin.update(dt, this));
       this.updatePoisonPools(dt);
@@ -1881,6 +2089,7 @@
       this.particles = this.particles.filter((particle) => particle.update(dt));
       this.bullets = this.bullets.filter((bullet) => bullet.alive);
       this.zombies = this.zombies.filter((zombie) => zombie.alive);
+      this.deathSprites = this.deathSprites.filter((sprite) => sprite.life > 0);
       this.coins = this.coins.filter((coin) => !coin.collected);
       this.shake = Math.max(0, this.shake - dt * 18);
       this.damageFlash = Math.max(0, this.damageFlash - dt);
@@ -1909,6 +2118,7 @@
         this.coins.forEach((coin) => coin.draw(ctx));
         this.bullets.forEach((bullet) => bullet.draw(ctx));
         this.zombies.forEach((zombie) => zombie.draw(ctx, this.elapsed, this.getZombieRenderAlpha(zombie)));
+        this.deathSprites.forEach((sprite) => sprite.draw(ctx));
         if (this.player) this.player.draw(ctx);
         this.particles.forEach((particle) => particle.draw(ctx));
       } else {
